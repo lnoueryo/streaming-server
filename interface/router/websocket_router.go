@@ -16,6 +16,7 @@ type WSRoute struct {
 	handlers map[string]WSMsgHandler
 	Params   map[string]string
 	BeforeConnect func(w http.ResponseWriter, req *http.Request)
+	OnDisconnect  func(ctx context.Context, conn *websocket.Conn)
 }
 
 type compiledPath struct {
@@ -75,6 +76,9 @@ func (r *Router) WS(path string, setup func(ws *WSRoute)) {
 
 		defer func() {
 			log.Info("🔌 Connection closed for %+v", params)
+			if wsr.OnDisconnect != nil {
+				wsr.OnDisconnect(ctx, conn)
+			}
 			conn.Close()
 		}()
 

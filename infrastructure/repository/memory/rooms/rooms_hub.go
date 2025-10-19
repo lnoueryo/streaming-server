@@ -29,17 +29,13 @@ func (h *Hub) Join(roomID, userID int, conn *websocket.Conn) {
 }
 
 func (h *Hub) RemoveClient(roomID, userID int) error {
-	room, err := h.getRoom(roomID);if err != nil {
+	room, err := h.getRoom(roomID)
+	if err != nil {
 		return err
 	}
-	client, err := h.getClient(roomID, userID);if err != nil {
-		return err
-	}
-	room.RemoveTracks(userID)
-	if client.HasPeerConnection() {
-		client.ClosePeerConnection()
-	}
-	room.removeClient(userID)
+	room.RemoveTracks(userID) // viewer側からtrack除去
+	room.removeClient(userID) // peerconnとconnを閉じて削除
+
 	if !room.HasClient() {
 		h.DeleteRoom(roomID)
 	}
@@ -128,7 +124,7 @@ func (h *Hub) SetTrack(roomID, userID int, localTrack *webrtc.TrackLocalStaticRT
                 return
             }
             packetCount++
-            if packetCount%1000 == 0 {
+            if packetCount%10000 == 0 {
                 log.Debug("📦 Received %d RTP packets (%d bytes)", packetCount, n) //送信側のストリーミング確認ログ
             }
 			if _, err = localTrack.Write(buf[:n]); err != nil {
@@ -143,14 +139,26 @@ func (h *Hub) SetTrack(roomID, userID int, localTrack *webrtc.TrackLocalStaticRT
 			continue
 		}
 
-		// 4-2) Sender が無い場合は AddTrack → Stable の時だけ 1 回だけ再交渉
+		alreadyAdded := false
+		for _, sender := range viewer.PeerConn.GetSenders() {
+			if sender.Track() != nil && sender.Track().ID() == localTrack.ID() {
+				alreadyAdded = true
+				break
+			}
+		}
+		if alreadyAdded {
+			log.Debug("Track already added for this viewer, skipping")
+			continue
+		}
+
+		// AddTrack
 		if _, err := viewer.PeerConn.AddTrack(localTrack); err != nil {
 			log.Error("AddTrack to viewer:", err)
 			continue
 		}
 		log.Debug("AddTrack to Viewer UserID: %v", viewer.UserID)
 
-		//　AddTrackしてもクライアントでイベントが発火するわけではないため再オファーが必要
+		// Re-Offer
 		offer, err := viewer.PeerConn.CreateOffer(nil)
 		if err != nil {
 			log.Error("ReOffer error:", err)
@@ -158,7 +166,6 @@ func (h *Hub) SetTrack(roomID, userID int, localTrack *webrtc.TrackLocalStaticRT
 		}
 		_ = viewer.PeerConn.SetLocalDescription(offer)
 
-		// WebSocket経由で viewer に送信
 		message := struct {
 			Type string `json:"type"`
 			Data struct {
@@ -176,9 +183,9 @@ func (h *Hub) SetTrack(roomID, userID int, localTrack *webrtc.TrackLocalStaticRT
 			},
 		}
 		_ = viewer.Conn.WriteJSON(message)
-			}
-			return nil
-		}
+	}
+	return nil
+}
 
 func (h *Hub) getClient(roomID, userID int) (*RtcClient, error) {
 	room, ok := h.rooms[roomID]; if !ok {

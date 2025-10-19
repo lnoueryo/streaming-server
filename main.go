@@ -1,6 +1,7 @@
 package main
 
 import (
+	close_connection_usecase "streaming-server.com/application/usecases/live_video/close_connection"
 	create_live_video_usecase "streaming-server.com/application/usecases/live_video/create_live_video"
 	create_viewer_peer_connection_usecase "streaming-server.com/application/usecases/live_video/create_viewer_peer_connection"
 	get_offer_usecase "streaming-server.com/application/usecases/live_video/get_offer"
@@ -25,12 +26,14 @@ func main() {
 	createViewerPeerConnectionUsecase := create_viewer_peer_connection_usecase.NewCreateViewerPeerConnection(roomRepository)
 	setAnswerUsecase := set_answer_usecase.NewSetAnswer(roomRepository)
 	setCandidateUsecase := set_candidate_usecase.NewSetCandidate(roomRepository)
+	closeConnectionUsecase := close_connection_usecase.NewCloseConnection(roomRepository)
 	liveVideoController := live_video_controller.NewLiveVideoController(
 		getOfferUsecase,
 		joinRoomUsecase,
 		createViewerPeerConnectionUsecase,
 		setAnswerUsecase,
 		setCandidateUsecase,
+		closeConnectionUsecase,
 	)
 	websocketController := websocket_controller.NewController(createLiveVideoUseccase)
 	controllers := controllers.NewControllers(

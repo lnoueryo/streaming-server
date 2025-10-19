@@ -17,12 +17,12 @@ func GetOfferRequest(ctx context.Context, msg interface{}) (*live_video_dto.Para
 	var params *live_video_dto.Params
 	var rawParams = &RawParams{}
 	var message *get_offer_usecase.Message
-    raw, err := json.Marshal(rawMessage)
+    raw, err := json.Marshal(msg)
     if err != nil {
         return params, message, err
     }
 
-	if err := json.Unmarshal(raw, &msg); err != nil {
+	if err := json.Unmarshal(raw, &rawMessage); err != nil {
 		return params, message, err
 	}
 	params, _ = rawParams.parse(ctx)

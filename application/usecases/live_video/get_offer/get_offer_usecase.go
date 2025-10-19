@@ -53,60 +53,6 @@ func (u *GetOfferUsecase) Do(
 		u.roomRepository.SetTrack(params.RoomID, params.UserID, localTrack, track);if err != nil {
 			log.Error("%v", err)
 		}
-
-		// TODO 下記はrooms_hubに入れる
-		// 3) Publisher→LocalTrack へのパイプ
-		// go func() {
-		// 	buf := make([]byte, 1500)
-		// 	for {
-		// 		n, _, err := track.Read(buf)
-		// 		if err != nil {
-		// 			break
-		// 		}
-		// 		if _, err = localTrack.Write(buf[:n]); err != nil {
-		// 			break
-		// 		}
-		// 	}
-		// }()
-
-		// 4) 既存 Viewer へ割り当て。ReplaceTrack 成功なら再交渉しない。
-		// for _, client := range room.Clients {
-		// 	if client.PeerConn == pc {
-		// 		continue
-		// 	}
-
-		// 	// 4-2) Sender が無い場合は AddTrack → Stable の時だけ 1 回だけ再交渉
-		// 	if _, err := client.PeerConn.AddTrack(localTrack); err != nil {
-		// 		log.Println("AddTrack to viewer:", err)
-		// 		continue
-		// 	}
-
-		// 	// if vpc.SignalingState() != webrtc.SignalingStateStable {
-		// 	// 	log.Println("skip renegotiate (not stable)")
-		// 	// 	continue
-		// 	// }
-
-		// 	// offer, err := vpc.CreateOffer(nil)
-		// 	// if err != nil {
-		// 	// 	log.Println("renegotiate CreateOffer:", err)
-		// 	// 	continue
-		// 	// }
-		// 	// g := webrtc.GatheringCompletePromise(vpc)
-		// 	// if err := vpc.SetLocalDescription(offer); err != nil {
-		// 	// 	log.Println("renegotiate SetLocal:", err)
-		// 	// 	continue
-		// 	// }
-		// 	// <-g
-
-		// 	// if vconn := getConnByPC(vpc); vconn != nil {
-		// 	// 	if err := vconn.WriteJSON(map[string]string{
-		// 	// 		"type": "offer",
-		// 	// 		"sdp":  offer.SDP,
-		// 	// 	}); err != nil {
-		// 	// 		log.Println("send renegotiate offer:", err)
-		// 	// 	}
-		// 	// }
-		// }
 	})
 	// TODO 順番の確認とmessageのフォーマット変更
 
@@ -126,6 +72,7 @@ func (u *GetOfferUsecase) Do(
 			log.Info("👌 Send: Candidate")
 		}
 	})
+
 	u.roomRepository.AddPeerConnection(params.RoomID, params.UserID, pc)
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: message.SDP}
 	if err := pc.SetRemoteDescription(offer); err != nil {
@@ -140,21 +87,6 @@ func (u *GetOfferUsecase) Do(
 	g := webrtc.GatheringCompletePromise(pc)
 	_ = pc.SetLocalDescription(answer)
 	<-g
-
-	// log.Println("create offer")
-	// offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: params.SDP}
-	// if err := pc.SetRemoteDescription(offer); err != nil {
-	// 	log.Println("setRemote:", err)
-	// 	return err
-	// }
-	// answer, err := pc.CreateAnswer(nil)
-	// if err != nil {
-	// 	log.Println("createAnswer:", err)
-	// 	return err
-	// }
-	// g := webrtc.GatheringCompletePromise(pc)
-	// _ = pc.SetLocalDescription(answer)
-	// <-g
 
 	msg := struct {
 		Type string `json:"type"`

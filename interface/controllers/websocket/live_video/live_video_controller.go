@@ -3,6 +3,7 @@ package live_video_controller
 import (
 	"context"
 	"github.com/gorilla/websocket"
+	close_connection_usecase "streaming-server.com/application/usecases/live_video/close_connection"
 	create_viewer_peer_connection_usecase "streaming-server.com/application/usecases/live_video/create_viewer_peer_connection"
 	get_offer_usecase "streaming-server.com/application/usecases/live_video/get_offer"
 	join_room_usecase "streaming-server.com/application/usecases/live_video/join_room"
@@ -20,6 +21,7 @@ type Controller struct {
 	CreateViewerPeerConnectionUsecase *create_viewer_peer_connection_usecase.CreateViewerPeerConnectionUsecase
 	SetAnswerUsecase *set_answer_usecase.SetAnswerUsecase
 	SetCandidateUsecase *set_candidate_usecase.SetCandidateUsecase
+	CloseConnectionUsecase *close_connection_usecase.CloseConnectionUsecase
 }
 
 func NewLiveVideoController(
@@ -28,6 +30,7 @@ func NewLiveVideoController(
 	createViewerPeerConnectionUsecase *create_viewer_peer_connection_usecase.CreateViewerPeerConnectionUsecase,
 	setAnswerUsecase *set_answer_usecase.SetAnswerUsecase,
 	setCandidateUsecase *set_candidate_usecase.SetCandidateUsecase,
+	closeConnectionUsecase *close_connection_usecase.CloseConnectionUsecase,
 ) *Controller {
 	return &Controller{
 		GetOfferUsecase,
@@ -35,6 +38,7 @@ func NewLiveVideoController(
 		createViewerPeerConnectionUsecase,
 		setAnswerUsecase,
 		setCandidateUsecase,
+		closeConnectionUsecase,
 	}
 }
 
@@ -85,4 +89,16 @@ func (c *Controller) GetOffer(
 		return
 	}
 	c.GetOfferUsecase.Do(params, message, conn)
+}
+
+func (c *Controller) CloseConnection(
+	ctx context.Context,
+	conn *websocket.Conn,
+) {
+	params, err := live_video_request.CloseConnectionRequest(ctx)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	c.CloseConnectionUsecase.Do(params, conn)
 }

@@ -60,17 +60,18 @@ func (r *Room) RemoveTracks(userID int) error {
         if viewer == client {
             continue
         }
-
-        for _, sender := range viewer.PeerConn.GetSenders() {
-			senderTrack := sender.Track()
-			if senderTrack == nil {
-				continue
+		for _, viewer := range r.clients {
+			for _, sender := range viewer.PeerConn.GetSenders() {
+				if sender.Track() != nil && sender.Track().ID() == track.Video.ID() {
+					_ = viewer.PeerConn.RemoveTrack(sender)
+					log.Debug("Removed old track from viewer:", viewer.UserID)
+				}
+				if sender.Track() != nil && sender.Track().ID() == track.Audio.ID() {
+					_ = viewer.PeerConn.RemoveTrack(sender)
+					log.Debug("Removed old track from viewer:", viewer.UserID)
+				}
 			}
-			if senderTrack == track.Video || senderTrack == track.Audio {
-				_ = sender.ReplaceTrack(nil)
-				_ = viewer.PeerConn.RemoveTrack(sender)
-			}
-        }
+		}
     }
     r.removeTrack(userID)
 	return nil
@@ -89,12 +90,22 @@ func (r *Room) addClient(userID int, conn *websocket.Conn) {
 }
 
 func (r *Room) removeClient(userID int) error {
-	client, err := r.getClient(userID);if err != nil {
+	client, err := r.getClient(userID)
+	if err != nil {
 		return err
 	}
-	client.Conn.Close()
-	client.PeerConn.Close()
+
+	if client.Conn != nil {
+		_ = client.Conn.Close()
+		client.Conn = nil
+	}
+	if client.PeerConn != nil {
+		_ = client.PeerConn.Close()
+		client.PeerConn = nil
+	}
+
 	delete(r.clients, userID)
+	log.Info("🧹 Removed client: %d", userID)
 	return nil
 }
 
