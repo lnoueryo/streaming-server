@@ -9,16 +9,16 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	live_video_hub "streaming-server.com/application/ports/realtime/hubs"
+	"streaming-server.com/infrastructure/ws"
 )
 
-type WSMsgHandler func(ctx context.Context, raw interface{}, c *live_video_hub.ThreadSafeWriter)
+type WSMsgHandler func(ctx context.Context, raw interface{}, c *ws.ThreadSafeWriter)
 
 type WSRoute struct {
 	handlers map[string]WSMsgHandler
 	Params   map[string]string
 	BeforeConnect func(w http.ResponseWriter, req *http.Request)
-	OnDisconnect  func(ctx context.Context, c *live_video_hub.ThreadSafeWriter)
+	OnDisconnect  func(ctx context.Context, c *ws.ThreadSafeWriter)
 }
 
 type compiledPath struct {
@@ -75,7 +75,7 @@ func (r *Router) WS(path string, setup func(ws *WSRoute)) {
 			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
 			return
 		}
-		c := &live_video_hub.ThreadSafeWriter{
+		c := &ws.ThreadSafeWriter{
 			conn,
 			sync.Mutex{},
 		}
@@ -97,7 +97,7 @@ func (r *Router) WS(path string, setup func(ws *WSRoute)) {
 			}
 
 			var env struct {
-				Type string      `json:"type"`
+				Event string      `json:"event"`
 				Data interface{} `json:"data"`
 			}
 			if err := json.Unmarshal(data, &env); err != nil {
@@ -105,9 +105,9 @@ func (r *Router) WS(path string, setup func(ws *WSRoute)) {
 				continue
 			}
 
-			h, ok := wsr.handlers[env.Type]
+			h, ok := wsr.handlers[env.Event]
 			if !ok {
-				log.Warn("⚠️ No handler for message type: %s", env.Type)
+				log.Warn("⚠️ No handler for message type: %s", env.Event)
 				continue
 			}
 

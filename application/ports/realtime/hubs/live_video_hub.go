@@ -1,33 +1,15 @@
 package live_video_hub
 
 import (
-	"sync"
-
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
+	"streaming-server.com/infrastructure/webrtc/broadcast"
 )
 
 type RtcClient struct {
     UserID   int
     Conn     *websocket.Conn
     PeerConn *webrtc.PeerConnection
-}
-
-type ThreadSafeWriter struct {
-	*websocket.Conn
-	sync.Mutex
-}
-
-type WebsocketMessage struct {
-	Type string `json:"type"`
-	Data  interface{} `json:"data"`
-}
-
-func (t *ThreadSafeWriter) WriteJSON(v any) error {
-	t.Lock()
-	defer t.Unlock()
-
-	return t.Conn.WriteJSON(v)
 }
 
 type Interface interface {
@@ -47,9 +29,7 @@ type Interface interface {
     AddICECandidate(roomID, userID int, cand webrtc.ICECandidateInit) error
     SignalPeerConnections()
     // AddTrack(roomId, userId int, t *webrtc.TrackRemote)
-    AddPeerConnection(userId int, peerConnection *webrtc.PeerConnection, c *ThreadSafeWriter)
-    SetViewerEvent(peerConnection *webrtc.PeerConnection, c *ThreadSafeWriter)
-    SetBroadcasterEvent(peerConnection *webrtc.PeerConnection, c *ThreadSafeWriter)
-    AddTrack(t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP
+    AddPeerConnection(userId int, peerConnection *broadcast.PeerConnectionState)
+    AddTrack(t *webrtc.TrackLocalStaticRTP)
     RemoveTrack(t *webrtc.TrackLocalStaticRTP)
 }

@@ -48,7 +48,7 @@
         return
       }
 
-      ws.send(JSON.stringify({type: 'candidate', data: e.candidate}))
+      ws.send(JSON.stringify({event: 'candidate', data: e.candidate}))
     }
 
     ws.onclose = function(evt) {
@@ -61,7 +61,7 @@
         return console.log('failed to parse msg')
       }
       console.log(msg)
-      switch (msg.type) {
+      switch (msg.event) {
         case 'offer':
           let offer = msg.data
           if (!offer) {
@@ -70,7 +70,7 @@
           pc.setRemoteDescription(offer)
           pc.createAnswer().then(answer => {
             pc.setLocalDescription(answer)
-            ws.send(JSON.stringify({type: 'answer', data: { sdp: answer.sdp }}))
+            ws.send(JSON.stringify({event: 'answer', data: answer}))
             console.log('send answer')
           })
           return
@@ -90,7 +90,7 @@
     }
     ws.onopen = () => {
       console.log('ok')
-      ws.send(JSON.stringify({type: 'viewer'}))
+      ws.send(JSON.stringify({event: 'viewer'}))
     }
   </script>
 </html>

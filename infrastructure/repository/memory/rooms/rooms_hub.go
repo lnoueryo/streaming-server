@@ -1,15 +1,15 @@
 package rooms_hub
 
 import (
-	"encoding/json"
 	"errors"
 	"sync"
 	"time"
+
 	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
-	live_video_hub "streaming-server.com/application/ports/realtime/hubs"
 	"streaming-server.com/infrastructure/logger"
+	"streaming-server.com/infrastructure/webrtc/broadcast"
+	"streaming-server.com/infrastructure/ws"
 )
 
 type Hub struct {
@@ -100,26 +100,26 @@ func (h *Hub) DeleteRoom(roomID int) {
 
 var (
 	listLock = sync.RWMutex{}
-	peerConnections = map[int]*peerConnectionState{}
+	peerConnections = map[int]*broadcast.PeerConnectionState{}
 	trackLocals = map[string]*webrtc.TrackLocalStaticRTP{}
 )
 
 
 type peerConnectionState struct {
 	peerConnection *webrtc.PeerConnection
-	websocket      *live_video_hub.ThreadSafeWriter
+	websocket      *ws.ThreadSafeWriter
 }
 
-func (h *Hub) AddPeerConnection(userId int, peerConnection *webrtc.PeerConnection, c *live_video_hub.ThreadSafeWriter) {
+func (h *Hub) AddPeerConnection(userId int, peerConnection *broadcast.PeerConnectionState) {
 	listLock.Lock()
-	peerConnections[userId] = &peerConnectionState{peerConnection, c}
+	peerConnections[userId] = peerConnection
 	listLock.Unlock()
-	log.Debug("AddPeerConnection: %v", peerConnections[userId].peerConnection.ConnectionState())
+	log.Debug("AddPeerConnection: %v", peerConnections[userId].Peer.ConnectionState())
 }
 
 func (h *Hub) AddICECandidate(roomID, userID int, candidate webrtc.ICECandidateInit) error {
 	log.Debug("add ice")
-	if err := peerConnections[userID].peerConnection.AddICECandidate(candidate); err != nil {
+	if err := peerConnections[userID].Peer.AddICECandidate(candidate); err != nil {
 		return err
 	}
 	return nil
@@ -130,7 +130,7 @@ func (h *Hub) SetRemoteDescription(roomID, userID int, sdp string) error {
 	peer, ok := peerConnections[userID];if !ok {
 		return errors.New("no peer")
 	}
-	if err := peer.peerConnection.SetRemoteDescription(webrtc.SessionDescription{
+	if err := peer.Peer.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeAnswer,
 		SDP:  sdp,
 	}); err != nil {
@@ -139,130 +139,14 @@ func (h *Hub) SetRemoteDescription(roomID, userID int, sdp string) error {
 	return nil
 }
 
-func (h *Hub) SetViewerEvent(peerConnection *webrtc.PeerConnection, c *live_video_hub.ThreadSafeWriter) {
-	// Trickle ICE. Emit server candidate to client
-	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
-		if i == nil {
-			return
-		}
-
-		if writeErr := c.WriteJSON(&live_video_hub.WebsocketMessage{
-			Type: "candidate",
-			Data:  i.ToJSON(),
-		}); writeErr != nil {
-			log.Error("Failed to write JSON: %v", writeErr)
-		}
-	})
-
-	// If PeerConnection is closed remove it from global list
-	peerConnection.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
-		log.Info("Connection state change: %s", p)
-
-		switch p {
-		case webrtc.PeerConnectionStateFailed:
-			if err := peerConnection.Close(); err != nil {
-				log.Error("Failed to close PeerConnection: %v", err)
-			}
-		case webrtc.PeerConnectionStateClosed:
-			h.SignalPeerConnections()
-		default:
-		}
-	})
-
-	peerConnection.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
-		log.Info("ICE connection state changed: %s", is)
-	})
-}
-
-func (h *Hub) SetBroadcasterEvent(peerConnection *webrtc.PeerConnection, c *live_video_hub.ThreadSafeWriter) {
-	// Trickle ICE. Emit server candidate to client
-	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
-		if i == nil {
-			return
-		}
-		candidateString, err := json.Marshal(i.ToJSON())
-		if err != nil {
-			log.Error("Failed to marshal candidate to json: %v", err)
-
-			return
-		}
-
-		log.Info("Send candidate to client: %s", candidateString)
-
-		if writeErr := c.WriteJSON(&live_video_hub.WebsocketMessage{
-			Type: "candidate",
-			Data:  i.ToJSON(),
-		}); writeErr != nil {
-			log.Error("Failed to write JSON: %v", writeErr)
-		}
-	})
-
-	peerConnection.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
-		log.Info("Connection state change: %s", p)
-
-		switch p {
-		case webrtc.PeerConnectionStateFailed:
-			if err := peerConnection.Close(); err != nil {
-				log.Error("Failed to close PeerConnection: %v", err)
-			}
-		case webrtc.PeerConnectionStateClosed:
-			h.SignalPeerConnections()
-		default:
-		}
-	})
-
-	peerConnection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		log.Info("Got remote track: Kind=%s, ID=%s, PayloadType=%d", t.Kind(), t.ID(), t.PayloadType())
-
-		trackLocal := h.AddTrack(t)
-		defer h.RemoveTrack(trackLocal)
-
-		buf := make([]byte, 1500)
-		rtpPkt := &rtp.Packet{}
-
-		for {
-			i, _, err := t.Read(buf)
-			if err != nil {
-				return
-			}
-
-			if err = rtpPkt.Unmarshal(buf[:i]); err != nil {
-				log.Error("Failed to unmarshal incoming RTP packet: %v", err)
-
-				return
-			}
-
-			rtpPkt.Extension = false
-			rtpPkt.Extensions = nil
-
-			if err = trackLocal.WriteRTP(rtpPkt); err != nil {
-				return
-			}
-		}
-	})
-
-	peerConnection.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
-		log.Info("ICE connection state changed: %s", is)
-	})
-}
-
 // Add to list of tracks and fire renegotation for all PeerConnections.
-func (h *Hub) AddTrack(t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
+func (h *Hub) AddTrack(t *webrtc.TrackLocalStaticRTP) {
 	listLock.Lock()
 	defer func() {
 		listLock.Unlock()
 		h.SignalPeerConnections()
 	}()
-
-	// Create a new TrackLocal with the same codec as our incoming
-	trackLocal, err := webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, t.ID(), t.StreamID())
-	if err != nil {
-		panic(err)
-	}
-
-	trackLocals[t.ID()] = trackLocal
-
-	return trackLocal
+	trackLocals[t.ID()] = t
 }
 
 // Remove from list of tracks and fire renegotation for all PeerConnections.
@@ -286,16 +170,16 @@ func (h *Hub) SignalPeerConnections() {
 
 	attemptSync := func() (tryAgain bool) {
 		for i := range peerConnections {
-			if peerConnections[i].peerConnection.ConnectionState() == webrtc.PeerConnectionStateClosed {
-				peerConnections[i].peerConnection.Close()
-				log.Error("delete peer: %v", peerConnections[i].peerConnection.ConnectionState())
+			if peerConnections[i].Peer.ConnectionState() == webrtc.PeerConnectionStateClosed {
+				peerConnections[i].Peer.Close()
+				log.Error("delete peer: %v", peerConnections[i].Peer.ConnectionState())
 				delete(peerConnections, i)
 				return true
 			}
 
 			existingSenders := map[string]bool{}
 
-			for _, sender := range peerConnections[i].peerConnection.GetSenders() {
+			for _, sender := range peerConnections[i].Peer.GetSenders() {
 				if sender.Track() == nil {
 					continue
 				}
@@ -304,14 +188,14 @@ func (h *Hub) SignalPeerConnections() {
 
 				// If we have a RTPSender that doesn't map to a existing track remove and signal
 				if _, ok := trackLocals[sender.Track().ID()]; !ok {
-					if err := peerConnections[i].peerConnection.RemoveTrack(sender); err != nil {
+					if err := peerConnections[i].Peer.RemoveTrack(sender); err != nil {
 						return true
 					}
 				}
 			}
 
 			// Don't receive videos we are sending, make sure we don't have loopback
-			for _, receiver := range peerConnections[i].peerConnection.GetReceivers() {
+			for _, receiver := range peerConnections[i].Peer.GetReceivers() {
 				if receiver.Track() == nil {
 					continue
 				}
@@ -322,23 +206,23 @@ func (h *Hub) SignalPeerConnections() {
 			// Add all track we aren't sending yet to the PeerConnection
 			for trackID := range trackLocals {
 				if _, ok := existingSenders[trackID]; !ok {
-					if _, err := peerConnections[i].peerConnection.AddTrack(trackLocals[trackID]); err != nil {
+					if _, err := peerConnections[i].Peer.AddTrack(trackLocals[trackID]); err != nil {
 						return true
 					}
 				}
 			}
 
-			offer, err := peerConnections[i].peerConnection.CreateOffer(nil)
+			offer, err := peerConnections[i].Peer.CreateOffer(nil)
 			if err != nil {
 				return true
 			}
 
-			if err = peerConnections[i].peerConnection.SetLocalDescription(offer); err != nil {
+			if err = peerConnections[i].Peer.SetLocalDescription(offer); err != nil {
 				return true
 			}
 
-			if err = peerConnections[i].websocket.WriteJSON(&live_video_hub.WebsocketMessage{
-				Type: "offer",
+			if err = peerConnections[i].WS.WriteJSON(&ws.WebsocketMessage{
+				Event: "offer",
 				Data:  offer,
 			}); err != nil {
 				return true
@@ -371,12 +255,12 @@ func (h *Hub) dispatchKeyFrame() {
 	defer listLock.Unlock()
 
 	for i := range peerConnections {
-		for _, receiver := range peerConnections[i].peerConnection.GetReceivers() {
+		for _, receiver := range peerConnections[i].Peer.GetReceivers() {
 			if receiver.Track() == nil {
 				continue
 			}
 
-			_ = peerConnections[i].peerConnection.WriteRTCP([]rtcp.Packet{
+			_ = peerConnections[i].Peer.WriteRTCP([]rtcp.Packet{
 				&rtcp.PictureLossIndication{
 					MediaSSRC: uint32(receiver.Track().SSRC()),
 				},

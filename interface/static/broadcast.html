@@ -52,16 +52,17 @@
 
       let ws = new WebSocket(`ws://localhost:8080/ws/live/1/${Math.floor(Math.random() * (10000 + 1))}`)
       pc.onicecandidate = e => {
+        console.log(e)
         if (!e.candidate) {
           return
         }
 
-        ws.send(JSON.stringify({type: 'candidate', data: e.candidate}))
+        ws.send(JSON.stringify({event: 'candidate', data: e.candidate}))
       }
 
       ws.onopen = function(evt) {
         console.log('open')
-        ws.send(JSON.stringify({type: 'offer'}))
+        ws.send(JSON.stringify({event: 'offer'}))
       }
 
       ws.onclose = function(evt) {
@@ -74,7 +75,7 @@
           return console.log('failed to parse msg')
         }
         console.log(msg)
-        switch (msg.type) {
+        switch (msg.event) {
           case 'offer':
             let offer = msg.data
             if (!offer) {
@@ -85,7 +86,7 @@
             console.log('ok')
             pc.createAnswer().then(answer => {
               pc.setLocalDescription(answer)
-              ws.send(JSON.stringify({type: 'answer', data: { sdp: answer.sdp }}))
+              ws.send(JSON.stringify({event: 'answer', data: answer}))
               console.log('send answer')
             })
             return
