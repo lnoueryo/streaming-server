@@ -25,8 +25,8 @@ func (u *CreateLiveVideoUsecase) Do(
 	// if room == nil {
 	// 	return
 	// }
-	if param.RoomID != 1 {
-		return shared.NewErrorResult[bool]("not-found", "Not Found")
-	}
+	// if param.RoomID != 1 {
+	// 	return shared.NewErrorResult[bool]("not-found", "Not Found")
+	// }
 	return shared.NewSuccessResult(true)
 }

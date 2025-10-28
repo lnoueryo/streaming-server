@@ -5,7 +5,7 @@ import (
 	"streaming-server.com/infrastructure/ws"
 )
 
-type PeerConnectionState struct {
+type PeerClient struct {
 	Peer *PeerConnection
 	WS *ws.ThreadSafeWriter
 }
@@ -14,7 +14,7 @@ type PeerConnection struct {
 	*webrtc.PeerConnection
 }
 
-func NewPeerConnection(conn *ws.ThreadSafeWriter) *PeerConnectionState {
+func NewPeerConnection(conn *ws.ThreadSafeWriter) *PeerClient {
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		return nil
@@ -28,7 +28,7 @@ func NewPeerConnection(conn *ws.ThreadSafeWriter) *PeerConnectionState {
 			return nil
 		}
 	}
-	return &PeerConnectionState{
+	return &PeerClient{
 		&PeerConnection{ pc },
 		conn,
 	}

@@ -30,7 +30,7 @@ func (u *GetOfferUsecase) Do(
 ) error {
 	pcs := broadcast.NewPeerConnection(conn)
 	defer pcs.Peer.Close()
-	u.roomRepository.AddPeerConnection(params.UserID, pcs)
+	u.roomRepository.AddPeerConnection(params.RoomID, params.UserID, pcs)
 
 	// Trickle ICE. Emit server candidate to client
 	pcs.Peer.OnICECandidate(func(i *webrtc.ICECandidate) {
@@ -52,7 +52,7 @@ func (u *GetOfferUsecase) Do(
 				log.Error("Failed to close PeerConnection: %v", err)
 			}
 		case webrtc.PeerConnectionStateClosed:
-			u.roomRepository.SignalPeerConnections()
+			u.roomRepository.SignalPeerConnections(params.RoomID)
 		default:
 		}
 	})
@@ -67,8 +67,8 @@ func (u *GetOfferUsecase) Do(
 		trackLocal, err := pcs.Peer.CreateLocalTrack(t);if err != nil {
 
 		}
-		u.roomRepository.AddTrack(trackLocal)
-		defer u.roomRepository.RemoveTrack(trackLocal)
+		u.roomRepository.AddTrack(params.RoomID, trackLocal)
+		defer u.roomRepository.RemoveTrack(params.RoomID, trackLocal)
 
 		buf := make([]byte, 1500)
 		rtpPkt := &rtp.Packet{}
@@ -94,7 +94,7 @@ func (u *GetOfferUsecase) Do(
 		}
 	})
 	// Signal for the new PeerConnection
-	u.roomRepository.SignalPeerConnections()
+	u.roomRepository.SignalPeerConnections(params.RoomID)
 
 	msg := &ws.WebsocketMessage{}
 	for {

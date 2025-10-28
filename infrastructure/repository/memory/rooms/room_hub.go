@@ -6,6 +6,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
+	"streaming-server.com/infrastructure/webrtc/broadcast"
 )
 
 type RtcClient struct {
@@ -20,16 +21,16 @@ type Tracks struct {
 }
 
 type Room struct {
-	clients map[int]*RtcClient     // userID -> client
-	tracks  map[string]*webrtc.TrackLocalStaticRTP         // publisherUserID -> tracks
-	mu      sync.RWMutex
+	listLock sync.RWMutex
+	clients map[int]*broadcast.PeerClient
+	trackLocals map[string]*webrtc.TrackLocalStaticRTP
 }
 
 func NewRoom() *Room {
 	return &Room{
-		make(map[int]*RtcClient),
-		make(map[string]*webrtc.TrackLocalStaticRTP),
 		sync.RWMutex{},
+		make(map[int]*broadcast.PeerClient),
+		make(map[string]*webrtc.TrackLocalStaticRTP),
 	}
 }
 
@@ -46,47 +47,47 @@ func NewClient(
 }
 
 
-func (r *Room) getClient(userID int) (*RtcClient, error) {
+func (r *Room) getClient(userID int) (*broadcast.PeerClient, error) {
 	client, ok := r.clients[userID];if !ok {
 		return nil, errors.New("client not found")
 	}
 	return client, nil
 }
 
-func (r *Room) addClient(userID int, conn *websocket.Conn) {
-	client := NewClient(userID, conn, nil)
-	r.clients[userID] = client
-}
+// func (r *Room) addClient(userID int, conn *websocket.Conn) {
+// 	client := NewClient(userID, conn, nil)
+// 	r.clients[userID] = client
+// }
 
-func (r *Room) removeClient(userID int) error {
-	client, err := r.getClient(userID)
-	if err != nil {
-		return err
-	}
+// func (r *Room) removeClient(userID int) error {
+// 	client, err := r.getClient(userID)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	if client.Conn != nil {
-		_ = client.Conn.Close()
-		client.Conn = nil
-	}
-	if client.PeerConn != nil {
-		_ = client.PeerConn.Close()
-		client.PeerConn = nil
-	}
+// 	if client.Conn != nil {
+// 		_ = client.Conn.Close()
+// 		client.Conn = nil
+// 	}
+// 	if client.PeerConn != nil {
+// 		_ = client.PeerConn.Close()
+// 		client.PeerConn = nil
+// 	}
 
-	delete(r.clients, userID)
-	log.Info("🧹 Removed client: %d", userID)
-	return nil
-}
+// 	delete(r.clients, userID)
+// 	log.Info("🧹 Removed client: %d", userID)
+// 	return nil
+// }
 
 
-func (r *Room) HasClient() bool {
-	return 0 < len(r.clients)
-}
+// func (r *Room) HasClient() bool {
+// 	return 0 < len(r.clients)
+// }
 
-func (c *RtcClient) HasPeerConnection() bool {
-	return c.PeerConn != nil
-}
+// func (c *RtcClient) HasPeerConnection() bool {
+// 	return c.PeerConn != nil
+// }
 
-func (c *RtcClient) ClosePeerConnection() {
-	c.PeerConn.Close()
-}
+// func (c *RtcClient) ClosePeerConnection() {
+// 	c.PeerConn.Close()
+// }

@@ -30,7 +30,7 @@ func (u *CreateViewerPeerConnectionUsecase) Do(
 ) error {
 	pcs := broadcast.NewPeerConnection(conn)
 	defer pcs.Peer.Close()
-	u.roomRepository.AddPeerConnection(params.UserID, pcs)
+	u.roomRepository.AddPeerConnection(params.RoomID, params.UserID, pcs)
 
 	pcs.Peer.OnICECandidate(func(i *webrtc.ICECandidate) {
 		if i == nil {
@@ -50,7 +50,7 @@ func (u *CreateViewerPeerConnectionUsecase) Do(
 				log.Error("Failed to close PeerConnection: %v", err)
 			}
 		case webrtc.PeerConnectionStateClosed:
-			u.roomRepository.SignalPeerConnections()
+			u.roomRepository.SignalPeerConnections(params.RoomID)
 		default:
 		}
 	})
@@ -59,7 +59,7 @@ func (u *CreateViewerPeerConnectionUsecase) Do(
 		log.Info("ICE connection state changed: %s", is)
 	})
 
-	u.roomRepository.SignalPeerConnections()
+	u.roomRepository.SignalPeerConnections(params.RoomID)
 
 	msg := &ws.WebsocketMessage{}
 	for {
