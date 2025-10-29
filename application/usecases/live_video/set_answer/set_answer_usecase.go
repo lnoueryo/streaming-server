@@ -1,7 +1,7 @@
 package set_answer_usecase
 
 import (
-	live_video_hub "streaming-server.com/application/ports/realtime/hubs"
+	room_memory_repository "streaming-server.com/application/ports/repositories/memory"
 	live_video_dto "streaming-server.com/application/usecases/live_video/dto"
 	"streaming-server.com/infrastructure/logger"
 	"streaming-server.com/infrastructure/ws"
@@ -10,10 +10,10 @@ import (
 var log = logger.Log
 
 type SetAnswerUsecase struct {
-	roomRepository live_video_hub.Interface
+	roomRepository room_memory_repository.IRoomRepository
 }
 
-func NewSetAnswer(roomRepo live_video_hub.Interface) *SetAnswerUsecase {
+func NewSetAnswer(roomRepo room_memory_repository.IRoomRepository) *SetAnswerUsecase {
 	return &SetAnswerUsecase{
 		roomRepo,
 	}
@@ -24,7 +24,10 @@ func (u *SetAnswerUsecase) Do(
 	message *Message,
 	conn *ws.ThreadSafeWriter,
 ) error {
-	err := u.roomRepository.SetRemoteDescription(params.RoomID, params.UserID, message.SDP);if err != nil {
+	room, err := u.roomRepository.GetRoom(params.RoomID);if err != nil {
+		log.Error("%v", err)
+	}
+	room.SetRemoteDescription(params.UserID, message.SDP);if err != nil {
 		log.Error("%v", err)
 	}
 	log.Debug("send answered")

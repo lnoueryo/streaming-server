@@ -29,6 +29,7 @@
       el.srcObject = event.streams[0]
       el.autoplay = true
       el.controls = true
+      el.muted = true
       document.getElementById('remoteVideos').appendChild(el)
 
       event.track.onmute = function(event) {
@@ -40,6 +41,7 @@
           el.parentNode.removeChild(el)
         }
       }
+      el.muted = false
     }
 
     let ws = new WebSocket(`ws://localhost:8080/ws/live/1/${Math.floor(Math.random() * 1000)}`)

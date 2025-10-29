@@ -34,6 +34,7 @@
         el.srcObject = stream
         el.autoplay = true
         el.controls = true
+        el.muted = true
         document.getElementById('remoteVideos').appendChild(el)
 
         event.track.onmute = function(event) {
@@ -45,6 +46,7 @@
             el.parentNode.removeChild(el)
           }
         }
+        el.muted = false
       }
 
       document.getElementById('localVideo').srcObject = stream

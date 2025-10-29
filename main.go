@@ -8,17 +8,18 @@ import (
 	set_answer_usecase "streaming-server.com/application/usecases/live_video/set_answer"
 	set_candidate_usecase "streaming-server.com/application/usecases/live_video/set_candidate"
 	"streaming-server.com/infrastructure/logger"
-	"streaming-server.com/infrastructure/repository/memory/rooms"
 	"streaming-server.com/infrastructure/server"
 
 	"streaming-server.com/infrastructure/router"
 	"streaming-server.com/interface/controllers"
 	websocket_controller "streaming-server.com/interface/controllers/http/websocket"
 	live_video_controller "streaming-server.com/interface/controllers/websocket/live_video"
+	room_memory_repository "streaming-server.com/interface/repositories/memory"
 )
 
 func main() {
-	roomRepository := rooms_hub.New()
+	roomRepository := room_memory_repository.NewRoomRepository()
+	// roomRepository := rooms_hub.New()
 	createLiveVideoUseccase := create_live_video_usecase.NewCreateLiveVideo()
 	getOfferUsecase := get_offer_usecase.NewGetOffer(roomRepository)
 	createViewerPeerConnectionUsecase := create_viewer_peer_connection_usecase.NewCreateViewerPeerConnection(roomRepository)

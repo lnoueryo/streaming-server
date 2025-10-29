@@ -3,8 +3,9 @@ package get_offer_usecase
 import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
-	live_video_hub "streaming-server.com/application/ports/realtime/hubs"
+	room_memory_repository "streaming-server.com/application/ports/repositories/memory"
 	live_video_dto "streaming-server.com/application/usecases/live_video/dto"
+	user_entity "streaming-server.com/domain/entities/user"
 	"streaming-server.com/infrastructure/logger"
 	"streaming-server.com/infrastructure/webrtc/broadcast"
 	"streaming-server.com/infrastructure/ws"
@@ -13,10 +14,10 @@ import (
 var log = logger.Log
 
 type GetOfferUsecase struct {
-	roomRepository live_video_hub.Interface
+	roomRepository room_memory_repository.IRoomRepository
 }
 
-func NewGetOffer(roomRepo live_video_hub.Interface,) *GetOfferUsecase {
+func NewGetOffer(roomRepo room_memory_repository.IRoomRepository) *GetOfferUsecase {
 	return &GetOfferUsecase{
 		roomRepo,
 	}
@@ -28,7 +29,13 @@ func (u *GetOfferUsecase) Do(
 ) error {
 	pcs := broadcast.NewPeerConnection(conn)
 	// defer pcs.Peer.Close()
-	u.roomRepository.AddPeerConnection(params.RoomID, params.UserID, pcs)
+	room := u.roomRepository.GetOrCreate(params.RoomID)
+	logger.Log.Debug("%v", room)
+	user := &user_entity.RuntimeUser{
+		params.UserID,
+		pcs,
+	}
+	room.AddUser(user)
 
 	pcs.Peer.OnICECandidate(func(i *webrtc.ICECandidate) {
 		if i == nil {
@@ -48,7 +55,7 @@ func (u *GetOfferUsecase) Do(
 				log.Error("Failed to close PeerConnection: %v", err)
 			}
 		case webrtc.PeerConnectionStateClosed:
-			u.roomRepository.SignalPeerConnections(params.RoomID)
+			room.SignalPeerConnections()
 		default:
 		}
 	})
@@ -62,8 +69,10 @@ func (u *GetOfferUsecase) Do(
 		trackLocal, err := pcs.Peer.CreateLocalTrack(t);if err != nil {
 
 		}
-		u.roomRepository.AddTrack(params.RoomID, trackLocal)
-		defer u.roomRepository.RemoveTrack(params.RoomID, trackLocal)
+		room.AddTrack(trackLocal)
+		defer room.RemoveTrack(trackLocal)
+		room.AddTrack(trackLocal)
+		defer room.RemoveTrack(trackLocal)
 
 		buf := make([]byte, 1500)
 		rtpPkt := &rtp.Packet{}
@@ -88,7 +97,6 @@ func (u *GetOfferUsecase) Do(
 			}
 		}
 	})
-	// Signal for the new PeerConnection
-	u.roomRepository.SignalPeerConnections(params.RoomID)
+	room.SignalPeerConnections()
 	return nil
 }

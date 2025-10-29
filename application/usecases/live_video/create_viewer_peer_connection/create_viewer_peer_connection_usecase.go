@@ -2,8 +2,9 @@ package create_viewer_peer_connection_usecase
 
 import (
 	"github.com/pion/webrtc/v4"
-	live_video_hub "streaming-server.com/application/ports/realtime/hubs"
+	room_memory_repository "streaming-server.com/application/ports/repositories/memory"
 	live_video_dto "streaming-server.com/application/usecases/live_video/dto"
+	user_entity "streaming-server.com/domain/entities/user"
 	"streaming-server.com/infrastructure/logger"
 	"streaming-server.com/infrastructure/webrtc/broadcast"
 	"streaming-server.com/infrastructure/ws"
@@ -14,10 +15,10 @@ var (
 )
 
 type CreateViewerPeerConnectionUsecase struct {
-	roomRepository live_video_hub.Interface
+	roomRepository room_memory_repository.IRoomRepository
 }
 
-func NewCreateViewerPeerConnection(roomRepo live_video_hub.Interface) *CreateViewerPeerConnectionUsecase {
+func NewCreateViewerPeerConnection(roomRepo room_memory_repository.IRoomRepository) *CreateViewerPeerConnectionUsecase {
 	return &CreateViewerPeerConnectionUsecase{
 		roomRepo,
 	}
@@ -29,7 +30,13 @@ func (u *CreateViewerPeerConnectionUsecase) Do(
 ) error {
 	pcs := broadcast.NewPeerConnection(conn)
 	// defer pcs.Peer.Close()
-	u.roomRepository.AddPeerConnection(params.RoomID, params.UserID, pcs)
+	room := u.roomRepository.GetOrCreate(params.RoomID)
+	logger.Log.Debug("%v", room)
+	user := &user_entity.RuntimeUser{
+		params.UserID,
+		pcs,
+	}
+	room.AddUser(user)
 
 	pcs.Peer.OnICECandidate(func(i *webrtc.ICECandidate) {
 		if i == nil {
@@ -49,7 +56,7 @@ func (u *CreateViewerPeerConnectionUsecase) Do(
 				log.Error("Failed to close PeerConnection: %v", err)
 			}
 		case webrtc.PeerConnectionStateClosed:
-			u.roomRepository.SignalPeerConnections(params.RoomID)
+			room.SignalPeerConnections()
 		default:
 		}
 	})
@@ -57,6 +64,6 @@ func (u *CreateViewerPeerConnectionUsecase) Do(
 	pcs.Peer.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
 		log.Info("ICE connection state changed: %s", is)
 	})
-	u.roomRepository.SignalPeerConnections(params.RoomID)
+	room.SignalPeerConnections()
 	return nil
 }

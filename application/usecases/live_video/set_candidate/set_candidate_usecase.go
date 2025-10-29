@@ -2,7 +2,7 @@ package set_candidate_usecase
 
 import (
 	"github.com/pion/webrtc/v4"
-	live_video_hub "streaming-server.com/application/ports/realtime/hubs"
+	room_memory_repository "streaming-server.com/application/ports/repositories/memory"
 	live_video_dto "streaming-server.com/application/usecases/live_video/dto"
 	"streaming-server.com/infrastructure/logger"
 	"streaming-server.com/infrastructure/ws"
@@ -11,10 +11,10 @@ import (
 var log = logger.Log
 
 type SetCandidateUsecase struct {
-	roomRepository live_video_hub.Interface
+	roomRepository room_memory_repository.IRoomRepository
 }
 
-func NewSetCandidate(roomRepo live_video_hub.Interface) *SetCandidateUsecase {
+func NewSetCandidate(roomRepo room_memory_repository.IRoomRepository) *SetCandidateUsecase {
 	return &SetCandidateUsecase{
 		roomRepo,
 	}
@@ -31,7 +31,10 @@ func (u *SetCandidateUsecase) Do(
 		SDPMLineIndex: message.SDPMLineIndex,
 	}
 
-	err := u.roomRepository.AddICECandidate(params.RoomID, params.UserID, cand);if err != nil {
+	room, err := u.roomRepository.GetRoom(params.RoomID);if err != nil {
+		log.Error("%v", err)
+	}
+	err = room.AddICECandidate(params.UserID, cand);if err != nil {
 		log.Error("%v", err)
 	}
 	log.Info("👌 Send: Set Candidate")

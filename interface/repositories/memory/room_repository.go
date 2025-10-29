@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"time"
+	room_memory_repository "streaming-server.com/application/ports/repositories/memory"
 	room_entity "streaming-server.com/domain/entities/room"
 	"streaming-server.com/infrastructure/logger"
 )
@@ -15,7 +16,7 @@ type RoomRepository struct {
 }
 
 var (
-	// _ live_video_hub.Interface = (*Hub)(nil)
+	_ room_memory_repository.IRoomRepository = (*RoomRepository)(nil)
 	log = *logger.Log
 )
 
