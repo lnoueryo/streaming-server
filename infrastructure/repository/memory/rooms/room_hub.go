@@ -4,23 +4,10 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/gorilla/websocket"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 	"streaming-server.com/infrastructure/webrtc/broadcast"
 )
-
-type RtcClient struct {
-	UserID   int
-	Conn     *websocket.Conn
-	PeerConn *webrtc.PeerConnection
-}
-
-type Tracks struct {
-	Video *webrtc.TrackLocalStaticRTP
-	Audio *webrtc.TrackLocalStaticRTP
-}
 
 type Room struct {
 	listLock sync.RWMutex
@@ -35,18 +22,6 @@ func NewRoom() *Room {
 		make(map[int]*broadcast.PeerClient),
 		make(map[string]*webrtc.TrackLocalStaticRTP),
 		nil,
-	}
-}
-
-func NewClient(
-	userID int,
-	conn *websocket.Conn,
-	peerConn *webrtc.PeerConnection,
-) *RtcClient {
-	return &RtcClient{
-		userID,
-		conn,
-		peerConn,
 	}
 }
 

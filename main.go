@@ -11,10 +11,10 @@ import (
 	"streaming-server.com/infrastructure/repository/memory/rooms"
 	"streaming-server.com/infrastructure/server"
 
+	"streaming-server.com/infrastructure/router"
 	"streaming-server.com/interface/controllers"
 	websocket_controller "streaming-server.com/interface/controllers/http/websocket"
 	live_video_controller "streaming-server.com/interface/controllers/websocket/live_video"
-	"streaming-server.com/interface/router"
 )
 
 func main() {

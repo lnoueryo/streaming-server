@@ -6,5 +6,10 @@ import (
 
 type User struct {
     ID      int
-	Name string
+}
+
+func NewUser(id int) *User {
+	return &User{
+		id,
+	}
 }
