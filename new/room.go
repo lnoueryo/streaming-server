@@ -37,7 +37,9 @@ func (r *Room)removeTrack(t *webrtc.TrackLocalStaticRTP) {
 	r.listLock.Lock()
 	defer func() {
 		r.listLock.Unlock()
-		r.signalPeerConnections()
+		if r != nil {
+			r.signalPeerConnections()
+		}
 	}()
 
 	delete(r.trackLocals, t.ID())
