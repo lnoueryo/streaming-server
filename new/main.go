@@ -193,6 +193,7 @@ func websocketBroadcastHandler(c *gin.Context) {
 
 				return
 			}
+		case "ping":
 		default:
 			log.Errorf("unknown message: %+v", message)
 		}
