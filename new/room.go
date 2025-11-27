@@ -18,45 +18,52 @@ type Room struct {
 	cancelFunc context.CancelFunc
 }
 
-func (r *Room)addTrack(t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
-	r.listLock.Lock()
+func addTrack(id string, t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
+	room, err := rooms.getRoom(id);if err != nil {
+		return nil
+	}
+	room.listLock.Lock()
 	defer func() {
-		r.listLock.Unlock()
-		r.signalPeerConnections()
+		room.listLock.Unlock()
+		signalPeerConnections(id)
 	}()
 	trackLocal, err := webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, t.ID(), t.StreamID())
 	if err != nil {
 		panic(err)
 	}
-	r.trackLocals[t.ID()] = trackLocal
+	room.trackLocals[t.ID()] = trackLocal
 	return trackLocal
 }
 
 // Remove from list of tracks and fire renegotation for all PeerConnections.
-func (r *Room)removeTrack(t *webrtc.TrackLocalStaticRTP) {
-	r.listLock.Lock()
+func removeTrack(id string, t *webrtc.TrackLocalStaticRTP) {
+	room, err := rooms.getRoom(id);if err != nil {
+		return
+	}
+	room.listLock.Lock()
 	defer func() {
-		r.listLock.Unlock()
-		if r != nil {
-			r.signalPeerConnections()
-		}
+		room.listLock.Unlock()
+		signalPeerConnections(id)
 	}()
 
-	delete(r.trackLocals, t.ID())
+	delete(room.trackLocals, t.ID())
 }
 
 // dispatchKeyFrame sends a keyframe to all PeerConnections, used everytime a new user joins the call.
-func (r *Room) dispatchKeyFrame() {
-	r.listLock.Lock()
-	defer r.listLock.Unlock()
+func dispatchKeyFrame(id string) {
+	room, err := rooms.getRoom(id);if err != nil {
+		return
+	}
+	room.listLock.Lock()
+	defer room.listLock.Unlock()
 
-	for i := range r.clients {
-		for _, receiver := range r.clients[i].Peer.GetReceivers() {
+	for i := range room.clients {
+		for _, receiver := range room.clients[i].Peer.GetReceivers() {
 			if receiver.Track() == nil {
 				continue
 			}
 
-			_ = r.clients[i].Peer.WriteRTCP([]rtcp.Packet{
+			_ = room.clients[i].Peer.WriteRTCP([]rtcp.Packet{
 				&rtcp.PictureLossIndication{
 					MediaSSRC: uint32(receiver.Track().SSRC()),
 				},
@@ -66,17 +73,21 @@ func (r *Room) dispatchKeyFrame() {
 }
 
 // signalPeerConnections updates each PeerConnection so that it is getting all the expected media tracks.
-func (r *Room) signalPeerConnections() {
+func signalPeerConnections(id string) {
+	room, err := rooms.getRoom(id);if err != nil {
+		return
+	}
+	room.listLock.Lock()
 	defer func() {
-		r.listLock.Unlock()
-		r.dispatchKeyFrame()
+		room.listLock.Unlock()
+		dispatchKeyFrame(id)
 	}()
 	attemptSync := func() (tryAgain bool) {
-		for i := range r.clients {
-			if r.clients[i].Peer.ConnectionState() == webrtc.PeerConnectionStateClosed {
-				delete(r.clients, i)
-				if len(r.clients) == 0 {
-					delete(rooms.item, r.ID)
+		for i := range room.clients {
+			if room.clients[i].Peer.ConnectionState() == webrtc.PeerConnectionStateClosed {
+				delete(room.clients, i)
+				if len(room.clients) == 0 {
+					delete(rooms.item, room.ID)
 				}
 				return true // We modified the slice, start from the beginning
 			}
@@ -84,7 +95,7 @@ func (r *Room) signalPeerConnections() {
 			// map of sender we already are seanding, so we don't double send
 			existingSenders := map[string]bool{}
 
-			for _, sender := range r.clients[i].Peer.GetSenders() {
+			for _, sender := range room.clients[i].Peer.GetSenders() {
 				if sender.Track() == nil {
 					continue
 				}
@@ -92,15 +103,15 @@ func (r *Room) signalPeerConnections() {
 				existingSenders[sender.Track().ID()] = true
 
 				// If we have a RTPSender that doesn't map to a existing track remove and signal
-				if _, ok := r.trackLocals[sender.Track().ID()]; !ok {
-					if err := r.clients[i].Peer.RemoveTrack(sender); err != nil {
+				if _, ok := room.trackLocals[sender.Track().ID()]; !ok {
+					if err := room.clients[i].Peer.RemoveTrack(sender); err != nil {
 						return true
 					}
 				}
 			}
 
 			// Don't receive videos we are sending, make sure we don't have loopback
-			for _, receiver := range r.clients[i].Peer.GetReceivers() {
+			for _, receiver := range room.clients[i].Peer.GetReceivers() {
 				if receiver.Track() == nil {
 					continue
 				}
@@ -109,24 +120,24 @@ func (r *Room) signalPeerConnections() {
 			}
 
 			// Add all track we aren't sending yet to the PeerConnection
-			for trackID := range r.trackLocals {
+			for trackID := range room.trackLocals {
 				if _, ok := existingSenders[trackID]; !ok {
-					if _, err := r.clients[i].Peer.AddTrack(r.trackLocals[trackID]); err != nil {
+					if _, err := room.clients[i].Peer.AddTrack(room.trackLocals[trackID]); err != nil {
 						return true
 					}
 				}
 			}
 
-			offer, err := r.clients[i].Peer.CreateOffer(nil)
+			offer, err := room.clients[i].Peer.CreateOffer(nil)
 			if err != nil {
 				return true
 			}
 
-			if err = r.clients[i].Peer.SetLocalDescription(offer); err != nil {
+			if err = room.clients[i].Peer.SetLocalDescription(offer); err != nil {
 				return true
 			}
 
-			if err = r.clients[i].WS.Send("offer", offer); err != nil {
+			if err = room.clients[i].WS.Send("offer", offer); err != nil {
 				return true
 			}
 		}
@@ -138,10 +149,8 @@ func (r *Room) signalPeerConnections() {
 		if syncAttempt == 25 {
 			// Release the lock and attempt a sync in 3 seconds. We might be blocking a RemoveTrack or AddTrack
 			go func() {
-				if r != nil {
-					time.Sleep(time.Second * 3)
-					r.signalPeerConnections()
-				}
+				time.Sleep(time.Second * 3)
+				signalPeerConnections(id)
 			}()
 			return
 		}
@@ -157,17 +166,17 @@ type Rooms struct {
 	lock sync.RWMutex
 }
 
-func (r *Rooms) getOrCreate(roomID string) *Room {
-	room := r.item[roomID]
+func (r *Rooms) getOrCreate(id string) *Room {
+	room := r.item[id]
 	if room == nil {
 		room = &Room{
-			roomID,
+			id,
 			sync.RWMutex{},
 			make(map[int]*RTCSession),
 			make(map[string]*webrtc.TrackLocalStaticRTP),
 			nil,
 		}
-		r.item[roomID] = room
+		r.item[id] = room
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	room.cancelFunc = cancel // Roomにキャンセル関数を保存
@@ -181,30 +190,30 @@ func (r *Rooms) getOrCreate(roomID string) *Room {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				room.dispatchKeyFrame()
+				dispatchKeyFrame(id)
 			}
 		}
 	}()
 	return room
 }
 
-func (r *Rooms) getRoom(roomID string) (*Room, error) {
-	room, ok := r.item[roomID];if !ok {
+func (r *Rooms) getRoom(id string) (*Room, error) {
+	room, ok := r.item[id];if !ok {
 		return nil, errors.New("room not found")
 	}
 	// request a keyframe every 3 seconds
 	go func() {
 		for range time.NewTicker(time.Second * 3).C {
-			room.dispatchKeyFrame()
+			dispatchKeyFrame(id)
 		}
 	}()
 
 	return room, nil
 }
 
-func (r *Rooms) deleteRoom(roomID string) {
-	if room, ok := r.item[roomID]; ok {
+func (r *Rooms) deleteRoom(id string) {
+	if room, ok := r.item[id]; ok {
 		room.cancelFunc() // goroutine停止
-		delete(r.item, roomID)
+		delete(r.item, id)
 	}
 }

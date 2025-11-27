@@ -99,7 +99,7 @@ func websocketBroadcastHandler(c *gin.Context) {
 				log.Errorf("Failed to close PeerConnection: %v", err)
 			}
 		case webrtc.PeerConnectionStateClosed:
-			room.signalPeerConnections()
+			signalPeerConnections(roomId)
 		default:
 		}
 	})
@@ -107,12 +107,8 @@ func websocketBroadcastHandler(c *gin.Context) {
 	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		log.Info("Got remote track: Kind=%s, ID=%s, PayloadType=%d", t.Kind(), t.ID(), t.PayloadType())
 
-		trackLocal := room.addTrack(t)
-		defer func() {
-			if room != nil {
-				room.removeTrack(trackLocal)
-			}
-		}()
+		trackLocal := addTrack(roomId, t)
+		defer removeTrack(roomId, trackLocal)
 
 		buf := make([]byte, 1500)
 		rtpPkt := &rtp.Packet{}
@@ -143,7 +139,7 @@ func websocketBroadcastHandler(c *gin.Context) {
 	})
 
 	// Signal for the new PeerConnection
-	room.signalPeerConnections()
+	signalPeerConnections(roomId)
 
 	message := &WebsocketMessage{}
 	for {
