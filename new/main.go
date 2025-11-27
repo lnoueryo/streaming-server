@@ -1,0 +1,196 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"sync"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4"
+	log "github.com/sirupsen/logrus"
+)
+
+func main() {
+	// Ginエンジンのインスタンスを作成
+	r := gin.Default()
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
+	r.GET("/", func(c *gin.Context) {
+		// JSONレスポンスを返す
+		c.JSON(200, gin.H{
+			"message": "Hello World",
+		})
+	})
+	r.GET("/ws/live/:roomId/:userId", websocketBroadcastHandler)
+	// 8080ポートでサーバーを起動
+	r.Run(":8080")
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+var rooms = &Rooms{
+	map[string]*Room{},
+	sync.RWMutex{},
+}
+
+
+type RTCSession struct {
+	WS *ThreadSafeWriter
+    Peer      *webrtc.PeerConnection
+}
+
+func websocketBroadcastHandler(c *gin.Context) {
+	roomId := c.Param("roomId")
+	userIdStr := c.Param("userId")
+	userId, err := strconv.Atoi(userIdStr);if err != nil {
+		log.Error("Failed to upgrade HTTP to Websocket: ", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+		return
+	}
+	unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		log.Error("Failed to upgrade HTTP to Websocket: ", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ws := NewThreadSafeWriter(unsafeConn)
+	defer ws.Close() //nolint
+	pc := NewPeerConnection()
+	defer pc.Close() //nolint
+
+	// Add our new PeerConnection to global list
+	room := rooms.getOrCreate(roomId)
+	room.listLock.Lock()
+	room.clients[userId] = &RTCSession{ws, pc}
+	room.listLock.Unlock()
+
+	// Trickle ICE. Emit server candidate to client
+	pc.OnICECandidate(func(i *webrtc.ICECandidate) {
+		if i == nil {
+			return
+		}
+
+		if writeErr := ws.Send("candidate", i.ToJSON()); writeErr != nil {
+			log.Error("Failed to write JSON: %v", writeErr)
+		}
+	})
+
+	// If PeerConnection is closed remove it from global list
+	pc.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
+		log.Info("Connection state change: %s", p)
+
+		switch p {
+		case webrtc.PeerConnectionStateFailed:
+			if err := pc.Close(); err != nil {
+				log.Errorf("Failed to close PeerConnection: %v", err)
+			}
+		case webrtc.PeerConnectionStateDisconnected:
+			if err := pc.Close(); err != nil {
+				log.Errorf("Failed to close PeerConnection: %v", err)
+			}
+		case webrtc.PeerConnectionStateClosed:
+			room.signalPeerConnections()
+		default:
+		}
+	})
+
+	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		log.Info("Got remote track: Kind=%s, ID=%s, PayloadType=%d", t.Kind(), t.ID(), t.PayloadType())
+
+		trackLocal := room.addTrack(t)
+		defer room.removeTrack(trackLocal)
+
+		buf := make([]byte, 1500)
+		rtpPkt := &rtp.Packet{}
+
+		for {
+			i, _, err := t.Read(buf)
+			if err != nil {
+				return
+			}
+
+			if err = rtpPkt.Unmarshal(buf[:i]); err != nil {
+				log.Errorf("Failed to unmarshal incoming RTP packet: %v", err)
+
+				return
+			}
+
+			rtpPkt.Extension = false
+			rtpPkt.Extensions = nil
+
+			if err = trackLocal.WriteRTP(rtpPkt); err != nil {
+				return
+			}
+		}
+	})
+
+	pc.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
+		log.Infof("ICE connection state changed: %s", is)
+	})
+
+	// Signal for the new PeerConnection
+	room.signalPeerConnections()
+
+	message := &WebsocketMessage{}
+	for {
+		_, raw, err := ws.ReadMessage()
+		if err != nil {
+			log.Errorf("Failed to read message: %v", err)
+			return
+		}
+
+		if err := json.Unmarshal(raw, &message); err != nil {
+			log.Error("Failed to unmarshal json to message: %v", err)
+			return
+		}
+		log.Debug("Got message: %s", message.Event)
+		switch message.Event {
+		case "candidate":
+			candidate := webrtc.ICECandidateInit{}
+			raw, err := json.Marshal(message.Data);if err != nil {
+				log.Errorf("Failed to unmarshal json to candidate: %v", err)
+
+				return
+			}
+			if err := json.Unmarshal([]byte(raw), &candidate); err != nil {
+				log.Errorf("Failed to unmarshal json to candidate: %v", err)
+
+				return
+			}
+
+			log.Infof("Got candidate: %v", candidate)
+
+			if err := pc.AddICECandidate(candidate); err != nil {
+				log.Errorf("Failed to add ICE candidate: %v", err)
+
+				return
+			}
+		case "answer":
+			answer := webrtc.SessionDescription{}
+			raw, err := json.Marshal(message.Data);if err != nil {
+				log.Errorf("Failed to unmarshal json to candidate: %v", err)
+
+				return
+			}
+			if err := json.Unmarshal([]byte(raw), &answer); err != nil {
+				log.Errorf("Failed to unmarshal json to answer: %v", err)
+
+				return
+			}
+
+			if err := pc.SetRemoteDescription(answer); err != nil {
+				log.Errorf("Failed to set remote description: %v", err)
+
+				return
+			}
+		default:
+			log.Errorf("unknown message: %+v", message)
+		}
+	}
+}
