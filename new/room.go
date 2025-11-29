@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 	"time"
-
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
@@ -13,8 +12,9 @@ import (
 type Room struct {
 	ID string
 	listLock sync.RWMutex
-	clients map[int]*RTCSession
+	clients map[string]*RTCSession
 	trackLocals map[string]*webrtc.TrackLocalStaticRTP
+	trackRemotes map[string]*webrtc.TrackRemote
 	cancelFunc context.CancelFunc
 }
 
@@ -35,7 +35,6 @@ func addTrack(id string, t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
 	return trackLocal
 }
 
-// Remove from list of tracks and fire renegotation for all PeerConnections.
 func removeTrack(id string, t *webrtc.TrackLocalStaticRTP) {
 	room, err := rooms.getRoom(id);if err != nil {
 		return
@@ -47,6 +46,24 @@ func removeTrack(id string, t *webrtc.TrackLocalStaticRTP) {
 	}()
 
 	delete(room.trackLocals, t.ID())
+}
+
+func addRemoteTrack(id string, t *webrtc.TrackRemote) {
+	room, err := rooms.getRoom(id);if err != nil {
+		return
+	}
+	room.listLock.Lock()
+	defer room.listLock.Unlock()
+	room.trackRemotes[t.ID()] = t
+}
+
+func removeRemoteTrack(id string, t *webrtc.TrackRemote) {
+	room, err := rooms.getRoom(id);if err != nil {
+		return
+	}
+	room.listLock.Lock()
+	defer room.listLock.Unlock()
+	delete(room.trackRemotes, t.ID())
 }
 
 // dispatchKeyFrame sends a keyframe to all PeerConnections, used everytime a new user joins the call.
@@ -193,8 +210,9 @@ func (r *Rooms) getOrCreate(id string) *Room {
         room = &Room{
             ID:          id,
             listLock:    sync.RWMutex{},
-            clients:     make(map[int]*RTCSession),
+            clients:     make(map[string]*RTCSession),
             trackLocals: make(map[string]*webrtc.TrackLocalStaticRTP),
+            trackRemotes: make(map[string]*webrtc.TrackRemote),
         }
         r.item[id] = room
 

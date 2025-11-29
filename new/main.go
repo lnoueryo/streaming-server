@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -19,14 +18,14 @@ func main() {
 	r := gin.Default()
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+	InitFirebase()
+	r.Use(FirebaseAuthMiddleware())
 	r.GET("/", func(c *gin.Context) {
-		// JSONレスポンスを返す
 		c.JSON(200, gin.H{
 			"message": "Hello World",
 		})
 	})
-	r.GET("/ws/live/:roomId/:userId", websocketBroadcastHandler)
-	// 8080ポートでサーバーを起動
+	r.GET("/ws/live/:roomId", websocketBroadcastHandler)
 	r.Run(":8080")
 }
 
@@ -49,13 +48,15 @@ type RTCSession struct {
 }
 
 func websocketBroadcastHandler(c *gin.Context) {
-	roomId := c.Param("roomId")
-	userIdStr := c.Param("userId")
-	userId, err := strconv.Atoi(userIdStr);if err != nil {
-		log.Error("Failed to upgrade HTTP to Websocket: ", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
+	userVal, exists := c.Get("user")
+	if !exists {
+		log.Warn("user not found in context")
 		return
 	}
+	user := userVal.(UserInfo)
+
+	roomId := c.Param("roomId")
+	userId := user.ID
 	unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Error("Failed to upgrade HTTP to Websocket: ", err)
