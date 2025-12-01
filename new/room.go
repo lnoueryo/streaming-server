@@ -11,7 +11,7 @@ import (
 type Room struct {
 	ID string
 	listLock sync.RWMutex
-	clients map[string]*RTCSession
+	clients map[string]*RTCClient
 	trackLocals map[string]*webrtc.TrackLocalStaticRTP
 	trackRemotes map[string]*webrtc.TrackRemote
 	cancelFunc context.CancelFunc
@@ -209,7 +209,7 @@ func (r *Rooms) getOrCreate(id string) *Room {
         room = &Room{
             ID:          id,
             listLock:    sync.RWMutex{},
-            clients:     make(map[string]*RTCSession),
+            clients:     make(map[string]*RTCClient),
             trackLocals: make(map[string]*webrtc.TrackLocalStaticRTP),
             trackRemotes: make(map[string]*webrtc.TrackRemote),
         }

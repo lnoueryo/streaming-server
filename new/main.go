@@ -19,15 +19,19 @@ func main() {
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	InitFirebase()
-	r.Use(FirebaseAuthMiddleware())
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"message": "Hello World",
 		})
 	})
-	r.GET("/ws/live/:roomId", websocketBroadcastHandler)
-	r.GET("/ws/live/:roomId/user", websocketBroadcastHandler)
-	r.GET("/ws/live/:roomId/user/delete", websocketBroadcastHandler)
+	wsAuth := r.Group("/ws")
+	wsAuth.Use(FirebaseWebsocketAuth())
+	wsAuth.GET("/live/:roomId", websocketBroadcastHandler)
+
+	httpAuth := r.Group("/")
+	httpAuth.Use(FirebaseHttpAuth())
+	httpAuth.GET("/room/:roomId/user", checkIfCanJoin)
+	httpAuth.GET("/room/:roomId/user/delete", deleteRtcClient)
 	r.Run(":8080")
 }
 
@@ -40,7 +44,8 @@ var rooms = &Rooms{
 	sync.RWMutex{},
 }
 
-type RTCSession struct {
+type RTCClient struct {
+	ID string
 	WS *ThreadSafeWriter
     Peer      *webrtc.PeerConnection
     sigMu       sync.Mutex
@@ -49,23 +54,23 @@ type RTCSession struct {
 }
 
 func websocketBroadcastHandler(c *gin.Context) {
-	user := getUser(c)
 	roomId := c.Param("roomId")
+	// userId := c.Param("userId")
+	user := getUser(c)
 	userId := user.ID
 	room, ok := rooms.getRoom(roomId);if ok {
 		_, ok := room.clients[userId];if ok {
 			errMsg := "他の端末で参加しています。"
 			log.Warn(errMsg)
-			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+			c.JSON(http.StatusBadRequest, gin.H{"message": errMsg})
 			return
 		}
-		
 	}
 
 	unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Error("Failed to upgrade HTTP to Websocket: ", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 
@@ -81,7 +86,8 @@ func websocketBroadcastHandler(c *gin.Context) {
 		client.WS.Close()
 		client.Peer.Close()
 	}
-	room.clients[userId] = &RTCSession{ws, pc, sync.Mutex{}, false, false}
+	log.Error(userId)
+	room.clients[userId] = &RTCClient{userId, ws, pc, sync.Mutex{}, false, false}
 	room.listLock.Unlock()
 
 	// Trickle ICE. Emit server candidate to client
@@ -232,28 +238,57 @@ func websocketBroadcastHandler(c *gin.Context) {
 	}
 }
 
-func deleteWebsocketClient(c *gin.Context) {
+func deleteRtcClient(c *gin.Context) {
 	user := getUser(c)
 	roomId := c.Param("roomId")
 	userId := user.ID
 	room, ok := rooms.getRoom(roomId); if !ok {
-		errMsg := "既にトークルームが存在していません"
-		log.Warn(errMsg)
-		c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+		err := &ErrorResponse{
+			"トークルームが既に存在しません",
+			http.StatusNotFound,
+			"no-target-room",
+		}
+		err.response(c)
 		return
 	}
 	client, ok := room.clients[userId]; if !ok {
-		errMsg := "トークルームにユーザーは参加していません"
-		log.Warn(errMsg)
-		c.JSON(http.StatusNoContent, gin.H{})
+		err := &ErrorResponse{
+			"ユーザーは既にトークルームから退出しています",
+			http.StatusNotFound,
+			"no-target-user",
+		}
+		err.response(c)
 		return
 	}
-	
+	room.listLock.Lock()
+	var data interface{}
+	client.WS.Send("close", data)
 	client.Peer.Close()
 	client.WS.Close()
-	// var data interface{}
-	// client.WS.Send("close", data)
+	delete(room.clients, userId)
+	room.listLock.Unlock()
 	c.JSON(http.StatusNoContent, gin.H{})
+}
+
+func checkIfCanJoin(c *gin.Context) {
+	user := getUser(c)
+	roomId := c.Param("roomId")
+	userId := user.ID
+	room, ok := rooms.getRoom(roomId); if !ok {
+		c.JSON(http.StatusOK, room)
+		return
+	}
+	_, ok = room.clients[userId]; if !ok {
+		c.JSON(http.StatusOK, room)
+		return
+	}
+
+	err := &ErrorResponse{
+		"ユーザーは既に別の端末で参加しています",
+		http.StatusConflict,
+		"already-join",
+	}
+	err.response(c)
 }
 
 func getUser(c *gin.Context) UserInfo {
@@ -262,4 +297,18 @@ func getUser(c *gin.Context) UserInfo {
 		return UserInfo{}
 	}
 	return userVal.(UserInfo)
+}
+
+type ErrorResponse struct {
+	message string
+	statusCode int
+	errorCode string
+}
+
+func (er *ErrorResponse)response(c *gin.Context) {
+	c.JSON(er.statusCode, gin.H{
+		"message": er.message,
+		"statusCode": er.statusCode,
+		"errorCode": er.errorCode,
+	})
 }

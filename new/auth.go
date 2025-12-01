@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
@@ -41,20 +42,19 @@ func VerifyIDToken(idToken string) (*auth.Token, error) {
     return firebaseAuth.VerifyIDToken(context.Background(), idToken)
 }
 
-func FirebaseAuthMiddleware() gin.HandlerFunc {
+func FirebaseWebsocketAuth() gin.HandlerFunc {
     return func(c *gin.Context) {
 
         idToken := c.Query("token")
         if idToken == "" {
-            c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token required"})
+            c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "トークンがありません"})
             return
         }
 
         // 2) Firebase で検証
         token, err := VerifyIDToken(idToken)
         if err != nil {
-            log.Error("invalid token: ", err)
-            c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+            c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "無効なトークンです"})
             return
         }
 
@@ -62,8 +62,6 @@ func FirebaseAuthMiddleware() gin.HandlerFunc {
         uid := token.UID
         email, _ := token.Claims["email"].(string)
         name, _ := token.Claims["name"].(string)
-
-        log.Info("Authenticated UID:", uid)
 
         c.Set("user", UserInfo{
             ID:   uid,
@@ -73,4 +71,55 @@ func FirebaseAuthMiddleware() gin.HandlerFunc {
 
         c.Next()
     }
+}
+
+func FirebaseHttpAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+            err := &ErrorResponse{
+                "トークンがありません",
+                http.StatusUnauthorized,
+                "no-token",
+            }
+            err.response(c)
+			return
+		}
+
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+            err := &ErrorResponse{
+                "無効のトークンです",
+                http.StatusUnauthorized,
+                "invalid-token",
+            }
+            err.response(c)
+			return
+		}
+
+		idToken := parts[1]
+
+		token, err := VerifyIDToken(idToken)
+		if err != nil {
+            err := &ErrorResponse{
+                "無効または期限切れのトークンです",
+                http.StatusUnauthorized,
+                "invalid-token",
+            }
+            err.response(c)
+			return
+		}
+
+		email, _ := token.Claims["email"].(string)
+		name, _ := token.Claims["name"].(string)
+
+        c.Set("user", UserInfo{
+            ID:   token.UID,
+            Email: email,
+            Name:  name,
+        })
+
+		c.Next()
+	}
 }
