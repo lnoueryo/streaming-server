@@ -42,6 +42,10 @@ func VerifyIDToken(idToken string) (*auth.Token, error) {
     return firebaseAuth.VerifyIDToken(context.Background(), idToken)
 }
 
+func VerifySessionCookieAndCheckRevoked(sessionCookie string) (*auth.Token, error) {
+    return firebaseAuth.VerifySessionCookieAndCheckRevoked(context.Background(), sessionCookie)
+}
+
 func FirebaseWebsocketAuth() gin.HandlerFunc {
     return func(c *gin.Context) {
 
@@ -75,6 +79,23 @@ func FirebaseWebsocketAuth() gin.HandlerFunc {
 
 func FirebaseHttpAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 1) Cookie（session）を優先して検証
+		if sessionCookie, err := c.Cookie("session"); err == nil && sessionCookie != "" {
+			token, err := VerifySessionCookieAndCheckRevoked(sessionCookie)
+			if err == nil {
+				email, _ := token.Claims["email"].(string)
+				name, _ := token.Claims["name"].(string)
+				c.Set("user", UserInfo{
+					ID:    token.UID,
+					Email: email,
+					Name:  name,
+				})
+				c.Next()
+				return
+			}
+			// Cookieが壊れていても、ここではフォールバックを許可する（すぐに401にしない）
+			// ログを出したい場合はここで warn を記録
+		}
 
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
