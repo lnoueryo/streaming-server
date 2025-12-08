@@ -45,7 +45,14 @@ func websocketBroadcastHandler(c *gin.Context) {
 		client.Peer.Close()
 	}
 	log.Error(userId)
-	room.clients[userId] = &RTCClient{userId, ws, pc, sync.Mutex{}, false, false}
+	room.clients[userId] = &RTCClient{
+		user,
+		ws,
+		pc,
+		sync.Mutex{},
+		false,
+		false,
+	}
 	room.listLock.Unlock()
 
 	// Trickle ICE. Emit server candidate to client
@@ -228,7 +235,7 @@ func websocketViewerHandler(c *gin.Context) {
 		client.Peer.Close()
 	}
 	log.Error(userId)
-	room.clients[userId] = &RTCClient{userId, ws, pc, sync.Mutex{}, false, false}
+	room.clients[userId] = &RTCClient{user, ws, pc, sync.Mutex{}, false, false}
 	room.listLock.Unlock()
 
 	// Trickle ICE. Emit server candidate to client

@@ -27,7 +27,7 @@ func main() {
 
 	httpAuth := r.Group("/")
 	httpAuth.Use(FirebaseHttpAuth())
-	httpAuth.GET("/room/:roomId/user", checkIfCanJoin)
+	httpAuth.GET("/room/:roomId/user", getRoom)
 	httpAuth.GET("/room/:roomId/user/delete", deleteRtcClient)
 	r.Run(":8080")
 }
@@ -42,7 +42,7 @@ var rooms = &Rooms{
 }
 
 type RTCClient struct {
-	ID string
+	UserInfo
 	WS *ThreadSafeWriter
     Peer      *webrtc.PeerConnection
     sigMu       sync.Mutex

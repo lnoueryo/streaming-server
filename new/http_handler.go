@@ -38,25 +38,32 @@ func deleteRtcClient(c *gin.Context) {
 	c.JSON(http.StatusNoContent, gin.H{})
 }
 
-func checkIfCanJoin(c *gin.Context) {
-	user := getUser(c)
+func getRoom(c *gin.Context) {
 	roomId := c.Param("roomId")
-	userId := user.ID
 	room, ok := rooms.getRoom(roomId); if !ok {
-		c.JSON(http.StatusOK, room)
+		err := &ErrorResponse{
+			"roomが存在しません",
+			404,
+			"not-found",
+		}
+		err.response(c)
 		return
 	}
-	_, ok = room.clients[userId]; if !ok {
-		c.JSON(http.StatusOK, room)
-		return
+	users := make([]gin.H, 0, len(room.clients))
+
+	for _, user := range room.clients {
+		users = append(users, gin.H{
+			"id": user.ID,
+			"name": user.Name,
+			"email": user.Email,
+			"image": user.Image,
+		})
 	}
 
-	err := &ErrorResponse{
-		"ユーザーは既に別の端末で参加しています",
-		http.StatusConflict,
-		"already-join",
-	}
-	err.response(c)
+	c.JSON(http.StatusOK, gin.H{
+		"id": room.ID,
+		"users": users,
+	})
 }
 
 func getUser(c *gin.Context) UserInfo {

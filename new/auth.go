@@ -16,6 +16,7 @@ type UserInfo struct {
     ID    string
     Email string
     Name  string
+    Image  string
 }
 
 var firebaseApp *firebase.App
@@ -49,14 +50,14 @@ func VerifySessionCookieAndCheckRevoked(sessionCookie string) (*auth.Token, erro
 func FirebaseWebsocketAuth() gin.HandlerFunc {
     return func(c *gin.Context) {
 
-        idToken := c.Query("token")
-        if idToken == "" {
+        session, _ := c.Cookie("session")
+        if session == "" {
             c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "トークンがありません"})
             return
         }
 
         // 2) Firebase で検証
-        token, err := VerifyIDToken(idToken)
+        token, err := VerifySessionCookieAndCheckRevoked(session)
         if err != nil {
             c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"message": "無効なトークンです"})
             return
@@ -66,11 +67,13 @@ func FirebaseWebsocketAuth() gin.HandlerFunc {
         uid := token.UID
         email, _ := token.Claims["email"].(string)
         name, _ := token.Claims["name"].(string)
+        image, _ := token.Claims["picture"].(string)
 
         c.Set("user", UserInfo{
             ID:   uid,
-            Email: email,
             Name:  name,
+            Email: email,
+            Image: image,
         })
 
         c.Next()
@@ -85,10 +88,12 @@ func FirebaseHttpAuth() gin.HandlerFunc {
 			if err == nil {
 				email, _ := token.Claims["email"].(string)
 				name, _ := token.Claims["name"].(string)
+                image, _ := token.Claims["picture"].(string)
 				c.Set("user", UserInfo{
 					ID:    token.UID,
 					Email: email,
 					Name:  name,
+                    Image: image,
 				})
 				c.Next()
 				return
@@ -134,11 +139,13 @@ func FirebaseHttpAuth() gin.HandlerFunc {
 
 		email, _ := token.Claims["email"].(string)
 		name, _ := token.Claims["name"].(string)
+        image, _ := token.Claims["image"].(string)
 
         c.Set("user", UserInfo{
             ID:   token.UID,
             Email: email,
             Name:  name,
+            Image: image,
         })
 
 		c.Next()
