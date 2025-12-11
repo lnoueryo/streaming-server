@@ -17,12 +17,13 @@ func websocketBroadcastHandler(c *gin.Context) {
 	user := getUser(c)
 	userId := user.ID
 	room, ok := rooms.getRoom(roomId);if ok {
-		_, ok := room.clients[userId];if ok {
-			errMsg := "他の端末で参加しています。"
-			log.Warn(errMsg)
-			c.JSON(http.StatusBadRequest, gin.H{"message": errMsg})
-			return
-		}
+		//　これだと再接続などで困るので他の方法を考える
+		// _, ok := room.clients[userId];if ok {
+		// 	errMsg := "他の端末で参加しています。"
+		// 	log.Warn(errMsg)
+		// 	c.JSON(http.StatusBadRequest, gin.H{"message": errMsg})
+		// 	return
+		// }
 	}
 
 	unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -35,7 +36,27 @@ func websocketBroadcastHandler(c *gin.Context) {
 	ws := NewThreadSafeWriter(unsafeConn)
 	defer ws.Close()
 	pc := NewPeerConnection()
-	defer pc.Close()
+	defer func() {
+		pc.Close()
+		room, ok := rooms.getRoom(roomId);if !ok {
+			return
+		}
+		var users []UserInfo
+		for _, client := range room.clients {
+			if client.ID == user.ID {
+				continue
+			}
+			users = append(users, UserInfo{
+				ID: client.ID,
+				Name: client.Name,
+				Email: client.Email,
+				Image: client.Image,
+			})
+		}
+		for _, client := range room.clients {
+			client.WS.Send("access", users)
+		}
+	}()
 
 	// Add our new PeerConnection to global list
 	room = rooms.getOrCreate(roomId)
@@ -71,6 +92,25 @@ func websocketBroadcastHandler(c *gin.Context) {
 		log.Info("Connection state change: %s", p)
 
 		switch p {
+		case webrtc.PeerConnectionStateConnected:
+			room, ok := rooms.getRoom(roomId);if !ok {
+				return
+			}
+			var users []UserInfo
+			for _, client := range room.clients {
+				if client.ID == user.ID {
+					continue
+				}
+				users = append(users, UserInfo{
+					ID: client.ID,
+					Name: client.Name,
+					Email: client.Email,
+					Image: client.Image,
+				})
+			}
+			for _, client := range room.clients {
+				client.WS.Send("access", users)
+			}
 		case webrtc.PeerConnectionStateFailed:
 			_ = pc.Close()
 		case webrtc.PeerConnectionStateDisconnected:
@@ -179,24 +219,7 @@ func websocketBroadcastHandler(c *gin.Context) {
 				log.Errorf("Failed to set remote description: %v", err)
 				return
 			}
-
-			// オファー直列化の解除と再実行
-			room, _ := rooms.getRoom(roomId)
-			room.listLock.RLock()
-			cli := room.clients[userId]
-			room.listLock.RUnlock()
-			if cli != nil {
-				cli.sigMu.Lock()
-				cli.makingOffer = false
-				doAgain := cli.needRenego
-				cli.needRenego = false
-				cli.sigMu.Unlock()
-
-				if doAgain {
-					// 再度差分反映（今度は makingOffer=false なので実行される）
-					go signalPeerConnections(roomId)
-				}
-			}
+			signalPeerConnections(roomId)
 		default:
 			log.Errorf("unknown message: %+v", message)
 		}

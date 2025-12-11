@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pion/webrtc/v4"
 )
 
 func deleteRtcClient(c *gin.Context) {
@@ -52,12 +53,14 @@ func getRoom(c *gin.Context) {
 	users := make([]gin.H, 0, len(room.clients))
 
 	for _, user := range room.clients {
-		users = append(users, gin.H{
-			"id": user.ID,
-			"name": user.Name,
-			"email": user.Email,
-			"image": user.Image,
-		})
+		if user.Peer.ConnectionState() == webrtc.PeerConnectionStateConnected {
+			users = append(users, gin.H{
+				"id": user.ID,
+				"name": user.Name,
+				"email": user.Email,
+				"image": user.Image,
+			})
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

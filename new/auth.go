@@ -13,10 +13,10 @@ import (
 )
 
 type UserInfo struct {
-    ID    string
-    Email string
-    Name  string
-    Image  string
+    ID    string `json:"id"`
+    Email string `json:"email"`
+    Name  string `json:"name"`
+    Image  string `json:"image"`
 }
 
 var firebaseApp *firebase.App

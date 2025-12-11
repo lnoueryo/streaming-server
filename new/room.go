@@ -92,107 +92,93 @@ func dispatchKeyFrame(id string) {
     }
 }
 
-// signalPeerConnections updates each PeerConnection so that it is getting all the expected media tracks.
 func signalPeerConnections(id string) {
-    room, ok := rooms.getRoom(id)
-    if !ok { return }
-
-    type applyFn func() bool // true=要リトライ
-    var ops []applyFn
-    var emptyAfter bool
-
-    // 1) ロック内で差分計算のみ
-    room.listLock.Lock()
-
-    for uid, cli := range room.clients {
-        if cli.Peer.ConnectionState() == webrtc.PeerConnectionStateClosed {
-            // mapから削除（ロック下でOK）
-            delete(room.clients, uid)
-        }
-    }
-    emptyAfter = (len(room.clients) == 0)
-
-    // 送受信の差分を計算して ops に積む
-    for _, cli := range room.clients {
-        pc := cli.Peer
-
-        // 既存 sender/receiver をスキャン（IDだけ集める）
-        existing := map[string]bool{}
-        for _, s := range pc.GetSenders() {
-            if tr := s.Track(); tr != nil { existing[tr.ID()] = true }
-        }
-        for _, rcv := range pc.GetReceivers() {
-            if tr := rcv.Track(); tr != nil { existing[tr.ID()] = true }
-        }
-
-        // Remove 対象
-        var toRemove []*webrtc.RTPSender
-        for _, s := range pc.GetSenders() {
-            if tr := s.Track(); tr != nil {
-                if _, ok := room.trackLocals[tr.ID()]; !ok {
-                    toRemove = append(toRemove, s)
-                }
-            }
-        }
-        // Add 対象
-        var toAdd []*webrtc.TrackLocalStaticRTP
-        for id, tl := range room.trackLocals {
-            if !existing[id] {
-                toAdd = append(toAdd, tl)
-            }
-        }
-
-        ws := cli.WS // WS参照
-
-        // 2) PC/WSの操作はロック外で走らせる関数として用意
-		ops = append(ops, func() bool {
-			cli.sigMu.Lock()
-			defer cli.sigMu.Unlock()
-
-			if cli.makingOffer {
-				// いま別のトリガで offer 中 → 後で一度だけやり直す印を付けて終わり
-				cli.needRenego = true
-				return false
-			}
-			cli.makingOffer = true
-
-			// Remove / Add はそのまま
-			for _, s := range toRemove {
-				if err := pc.RemoveTrack(s); err != nil { /* ログ */ }
-			}
-			for _, tl := range toAdd {
-				if _, err := pc.AddTrack(tl); err != nil { /* ログ */ }
-			}
-
-			offer, err := pc.CreateOffer(nil)
-			if err != nil { cli.makingOffer = false; return true }
-			if err = pc.SetLocalDescription(offer); err != nil { cli.makingOffer = false; return true }
-			if err = ws.Send("offer", offer); err != nil { cli.makingOffer = false; return true }
-
-			// ここでは makingOffer=true のまま。answer 受領で解除する
-			return false
-		})
-    }
-
-    room.listLock.Unlock()
-
-    // 3) ルームが空になったら、rooms をロックして削除（mapは常にrooms.lockで）
-    if emptyAfter {
-        rooms.deleteRoom(id)
+	room, ok := rooms.getRoom(id);if !ok {
         return
     }
+	room.listLock.Lock()
+	defer func() {
+		room.listLock.Unlock()
+		dispatchKeyFrame(id)
+	}()
+	attemptSync := func() (tryAgain bool) {
+		for i := range room.clients {
+			if room.clients[i].Peer.ConnectionState() == webrtc.PeerConnectionStateClosed {
+				delete(room.clients, i)
+				if len(room.clients) == 0 {
+					delete(rooms.item, id)
+				}
+				return true // We modified the slice, start from the beginning
+			}
 
-    // 4) ロック外でPC/WS操作を適用。失敗したら短時間後に再試行
-    retry := false
-    for _, f := range ops {
-        if f() { retry = true }
-    }
-    if retry {
-        time.AfterFunc(3*time.Second, func(){ signalPeerConnections(id) })
-    }
+			// map of sender we already are seanding, so we don't double send
+			existingSenders := map[string]bool{}
 
-    // 5) 最後にロック外で KeyFrame 要求
-    dispatchKeyFrame(id)
+			for _, sender := range room.clients[i].Peer.GetSenders() {
+				if sender.Track() == nil {
+					continue
+				}
+
+				existingSenders[sender.Track().ID()] = true
+
+				// If we have a RTPSender that doesn't map to a existing track remove and signal
+				if _, ok := room.trackLocals[sender.Track().ID()]; !ok {
+					if err := room.clients[i].Peer.RemoveTrack(sender); err != nil {
+						return true
+					}
+				}
+			}
+
+			// Don't receive videos we are sending, make sure we don't have loopback
+			for _, receiver := range room.clients[i].Peer.GetReceivers() {
+				if receiver.Track() == nil {
+					continue
+				}
+
+				existingSenders[receiver.Track().ID()] = true
+			}
+
+			// Add all track we aren't sending yet to the PeerConnection
+			for trackID := range room.trackLocals {
+				if _, ok := existingSenders[trackID]; !ok {
+					if _, err := room.clients[i].Peer.AddTrack(room.trackLocals[trackID]); err != nil {
+						return true
+					}
+				}
+			}
+
+			offer, err := room.clients[i].Peer.CreateOffer(nil)
+			if err != nil {
+				return true
+			}
+
+			if err = room.clients[i].Peer.SetLocalDescription(offer); err != nil {
+				return true
+			}
+
+			if err = room.clients[i].WS.Send("offer", offer); err != nil {
+				return true
+			}
+		}
+
+		return tryAgain
+	}
+
+	for syncAttempt := 0; ; syncAttempt++ {
+		if syncAttempt == 10 {
+			// Release the lock and attempt a sync in 3 seconds. We might be blocking a RemoveTrack or AddTrack
+			go func() {
+				time.Sleep(time.Second * 3)
+				signalPeerConnections(id)
+			}()
+
+			return
+		}
+
+		if !attemptSync() {
+			break
+		}
+	}
 }
 
 type Rooms struct {
