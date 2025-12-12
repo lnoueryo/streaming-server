@@ -14,7 +14,7 @@ import (
 
 func websocketHandler(c *gin.Context) {
     user := getUser(c)
-    roomId := c.Param("room")
+    roomId := c.Param("roomId")
     room := rooms.getOrCreate(roomId)
 
     // Upgrade HTTP → WebSocket
@@ -106,7 +106,7 @@ func websocketHandler(c *gin.Context) {
 					room, ok := rooms.getRoom(roomId);if !ok {
 						return
 					}
-					var users []UserInfo
+					users := make([]UserInfo, 0)
 					for _, participant := range room.participants {
 						users = append(users, UserInfo{
 							ID: participant.ID,
@@ -116,8 +116,8 @@ func websocketHandler(c *gin.Context) {
 						})
 					}
 					res, _ := json.Marshal(users)
-					for _, participant := range room.participants {
-						participant.WS.Send("access", string(res))
+					for _, conn := range room.wsConnections {
+						conn.Send("access", string(res))
 					}
 				case webrtc.PeerConnectionStateFailed:
 					_ = peerConnection.Close()
@@ -136,7 +136,7 @@ func websocketHandler(c *gin.Context) {
 					room.listLock.Lock()
 					delete(room.participants, user.ID)
 					room.listLock.Unlock()
-					var users []UserInfo
+					users := make([]UserInfo, 0)
 					for _, participant := range room.participants {
 						users = append(users, UserInfo{
 							ID: participant.ID,
@@ -146,8 +146,8 @@ func websocketHandler(c *gin.Context) {
 						})
 					}
 					res, _ := json.Marshal(users)
-					for _, participant := range room.participants {
-						participant.WS.Send("access", string(res))
+					for _, conn := range room.wsConnections {
+						conn.Send("access", string(res))
 					}
 				}
 			})
