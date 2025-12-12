@@ -7,7 +7,7 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func deleteRtcClient(c *gin.Context) {
+func removeParticipant(c *gin.Context) {
 	user := getUser(c)
 	roomId := c.Param("roomId")
 	userId := user.ID
@@ -20,7 +20,7 @@ func deleteRtcClient(c *gin.Context) {
 		err.response(c)
 		return
 	}
-	client, ok := room.clients[userId]; if !ok {
+	participant, ok := room.participants[userId]; if !ok {
 		err := &ErrorResponse{
 			"ユーザーは既にトークルームから退出しています",
 			http.StatusNotFound,
@@ -30,11 +30,12 @@ func deleteRtcClient(c *gin.Context) {
 		return
 	}
 	room.listLock.Lock()
-	var data interface{}
-	client.WS.Send("close", data)
-	client.Peer.Close()
-	client.WS.Close()
-	delete(room.clients, userId)
+	var data string
+	participant.WS.Send("close", data)
+	participant.PC.Close()
+	delete(room.participants, userId)
+	participant.WS.Close()
+	delete(room.wsConnections, participant.WS.Conn)
 	room.listLock.Unlock()
 	c.JSON(http.StatusNoContent, gin.H{})
 }
@@ -50,22 +51,22 @@ func getRoom(c *gin.Context) {
 		err.response(c)
 		return
 	}
-	users := make([]gin.H, 0, len(room.clients))
+	participants := make([]gin.H, 0, len(room.participants))
 
-	for _, user := range room.clients {
-		if user.Peer.ConnectionState() == webrtc.PeerConnectionStateConnected {
-			users = append(users, gin.H{
-				"id": user.ID,
-				"name": user.Name,
-				"email": user.Email,
-				"image": user.Image,
+	for _, participant := range room.participants {
+		if participant.PC.ConnectionState() == webrtc.PeerConnectionStateConnected {
+			participants = append(participants, gin.H{
+				"id": participant.ID,
+				"name": participant.Name,
+				"email": participant.Email,
+				"image": participant.Image,
 			})
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"id": room.ID,
-		"users": users,
+		"users": participants,
 	})
 }
 

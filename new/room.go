@@ -1,184 +1,34 @@
+// ==============================
+// rooms.go
+// ==============================
+
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
 
+type Participant struct {
+	UserInfo
+	WS *ThreadSafeWriter
+	PC *webrtc.PeerConnection
+}
+
 type Room struct {
-	ID string
-	listLock sync.RWMutex
-	clients map[string]*RTCClient
-	trackLocals map[string]*webrtc.TrackLocalStaticRTP
-	trackRemotes map[string]*webrtc.TrackRemote
-	cancelFunc context.CancelFunc
-}
-
-func addTrack(id string, t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
-	room, ok := rooms.getRoom(id);if !ok {
-		return nil
-	}
-	room.listLock.Lock()
-	defer func() {
-		room.listLock.Unlock()
-		signalPeerConnections(id)
-	}()
-	trackLocal, err := webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, t.ID(), t.StreamID())
-	if err != nil {
-		panic(err)
-	}
-	room.trackLocals[t.ID()] = trackLocal
-	return trackLocal
-}
-
-func removeTrack(id string, t *webrtc.TrackLocalStaticRTP) {
-	room, ok := rooms.getRoom(id);if !ok {
-		return
-	}
-	room.listLock.Lock()
-	defer func() {
-		room.listLock.Unlock()
-		signalPeerConnections(id)
-	}()
-
-	delete(room.trackLocals, t.ID())
-}
-
-func addRemoteTrack(id string, t *webrtc.TrackRemote) {
-	room, ok := rooms.getRoom(id);if !ok {
-		return
-	}
-	room.listLock.Lock()
-	defer room.listLock.Unlock()
-	room.trackRemotes[t.ID()] = t
-}
-
-func removeRemoteTrack(id string, t *webrtc.TrackRemote) {
-	room, ok := rooms.getRoom(id);if !ok {
-		return
-	}
-	room.listLock.Lock()
-	defer room.listLock.Unlock()
-	delete(room.trackRemotes, t.ID())
-}
-
-// dispatchKeyFrame sends a keyframe to all PeerConnections, used everytime a new user joins the call.
-func dispatchKeyFrame(id string) {
-    room, ok := rooms.getRoom(id)
-    if !ok { return }
-
-    // 収集だけロック下で
-    type target struct{ pc *webrtc.PeerConnection; ssrc uint32 }
-    var targets []target
-
-    room.listLock.RLock()
-    for _, c := range room.clients {
-        for _, recv := range c.Peer.GetReceivers() {
-            if tr := recv.Track(); tr != nil {
-                targets = append(targets, target{pc: c.Peer, ssrc: uint32(tr.SSRC())})
-            }
-        }
-    }
-    room.listLock.RUnlock()
-
-    // ロック外でRTCP送信
-    for _, t := range targets {
-        _ = t.pc.WriteRTCP([]rtcp.Packet{
-            &rtcp.PictureLossIndication{MediaSSRC: t.ssrc},
-        })
-    }
-}
-
-func signalPeerConnections(id string) {
-	room, ok := rooms.getRoom(id);if !ok {
-        return
-    }
-	room.listLock.Lock()
-	defer func() {
-		room.listLock.Unlock()
-		dispatchKeyFrame(id)
-	}()
-	attemptSync := func() (tryAgain bool) {
-		for i := range room.clients {
-			if room.clients[i].Peer.ConnectionState() == webrtc.PeerConnectionStateClosed {
-				delete(room.clients, i)
-				if len(room.clients) == 0 {
-					delete(rooms.item, id)
-				}
-				return true // We modified the slice, start from the beginning
-			}
-
-			// map of sender we already are seanding, so we don't double send
-			existingSenders := map[string]bool{}
-
-			for _, sender := range room.clients[i].Peer.GetSenders() {
-				if sender.Track() == nil {
-					continue
-				}
-
-				existingSenders[sender.Track().ID()] = true
-
-				// If we have a RTPSender that doesn't map to a existing track remove and signal
-				if _, ok := room.trackLocals[sender.Track().ID()]; !ok {
-					if err := room.clients[i].Peer.RemoveTrack(sender); err != nil {
-						return true
-					}
-				}
-			}
-
-			// Don't receive videos we are sending, make sure we don't have loopback
-			for _, receiver := range room.clients[i].Peer.GetReceivers() {
-				if receiver.Track() == nil {
-					continue
-				}
-
-				existingSenders[receiver.Track().ID()] = true
-			}
-
-			// Add all track we aren't sending yet to the PeerConnection
-			for trackID := range room.trackLocals {
-				if _, ok := existingSenders[trackID]; !ok {
-					if _, err := room.clients[i].Peer.AddTrack(room.trackLocals[trackID]); err != nil {
-						return true
-					}
-				}
-			}
-
-			offer, err := room.clients[i].Peer.CreateOffer(nil)
-			if err != nil {
-				return true
-			}
-
-			if err = room.clients[i].Peer.SetLocalDescription(offer); err != nil {
-				return true
-			}
-
-			if err = room.clients[i].WS.Send("offer", offer); err != nil {
-				return true
-			}
-		}
-
-		return tryAgain
-	}
-
-	for syncAttempt := 0; ; syncAttempt++ {
-		if syncAttempt == 10 {
-			// Release the lock and attempt a sync in 3 seconds. We might be blocking a RemoveTrack or AddTrack
-			go func() {
-				time.Sleep(time.Second * 3)
-				signalPeerConnections(id)
-			}()
-
-			return
-		}
-
-		if !attemptSync() {
-			break
-		}
-	}
+	ID           string
+	listLock     sync.Mutex
+	wsConnections map[*websocket.Conn]*ThreadSafeWriter
+	participants  map[string]*Participant
+	trackLocals   map[string]*webrtc.TrackLocalStaticRTP
+	trackRemotes  map[string]*webrtc.TrackRemote
+	cancelFunc    context.CancelFunc
 }
 
 type Rooms struct {
@@ -186,56 +36,210 @@ type Rooms struct {
 	lock sync.RWMutex
 }
 
+func (r *Rooms) getRoom(id string) (*Room, bool) {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+	room, ok := r.item[id]
+	return room, ok
+}
+
 func (r *Rooms) getOrCreate(id string) *Room {
     r.lock.Lock()
     defer r.lock.Unlock()
 
     room := r.item[id]
-    if room == nil {
-        room = &Room{
-            ID:          id,
-            listLock:    sync.RWMutex{},
-            clients:     make(map[string]*RTCClient),
-            trackLocals: make(map[string]*webrtc.TrackLocalStaticRTP),
-            trackRemotes: make(map[string]*webrtc.TrackRemote),
-        }
-        r.item[id] = room
-
-        // ticker は作成時に一度だけ
-        ctx, cancel := context.WithCancel(context.Background())
-        room.cancelFunc = cancel
-        go func() {
-            t := time.NewTicker(3 * time.Second)
-            defer t.Stop()
-            for {
-                select {
-                case <-ctx.Done():
-                    return
-                case <-t.C:
-                    dispatchKeyFrame(id) // ← この中も lock 外でPC操作するよう修正(後述)
-                }
-            }
-        }()
+    if room != nil {
+        return room
     }
+
+    room = &Room{
+        ID:            id,
+        wsConnections: make(map[*websocket.Conn]*ThreadSafeWriter),
+        participants:  make(map[string]*Participant),
+        trackLocals:   make(map[string]*webrtc.TrackLocalStaticRTP),
+        trackRemotes:  make(map[string]*webrtc.TrackRemote),
+    }
+    r.item[id] = room
+
+    // --- Keyframe Ticker（旧 main の処理を Room に移動） ---
+    ctx, cancel := context.WithCancel(context.Background())
+    room.cancelFunc = cancel
+
+    go func(room *Room) {
+        ticker := time.NewTicker(1 * time.Second)
+        defer ticker.Stop()
+
+        for {
+            select {
+            case <-ctx.Done():
+                return
+            case <-ticker.C:
+                dispatchKeyFrame(room)
+            }
+        }
+    }(room)
+
     return room
 }
 
-func (r *Rooms) getRoom(id string) (*Room, bool) {
-    r.lock.RLock()
-    room, ok := r.item[id]
-    r.lock.RUnlock()
-    if !ok {
-        return nil, false
-    }
-    return room, true
+func (r *Rooms) deleteRoom(id string) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	delete(r.item, id)
 }
 
-func (r *Rooms) deleteRoom(id string) {
-    r.lock.Lock()
-    room, ok := r.item[id]
-    if ok {
-        if room.cancelFunc != nil { room.cancelFunc() }
-        delete(r.item, id)
+// --------------------------------------------------------
+// Track handling
+// --------------------------------------------------------
+
+func addTrack(room *Room, t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
+    room.listLock.Lock()
+    defer func() {
+        room.listLock.Unlock()
+        signalPeerConnections(room)
+    }()
+
+    trackLocal, err := webrtc.NewTrackLocalStaticRTP(
+        t.Codec().RTPCodecCapability, t.ID(), t.StreamID(),
+    )
+    if err != nil {
+        panic(err)
     }
-    r.lock.Unlock()
+
+    room.trackLocals[t.ID()] = trackLocal
+    room.trackRemotes[t.ID()] = t
+
+    return trackLocal
+}
+
+func removeTrack(room *Room, t *webrtc.TrackLocalStaticRTP) {
+    room.listLock.Lock()
+    defer func() {
+        room.listLock.Unlock()
+        signalPeerConnections(room)
+    }()
+    delete(room.trackLocals, t.ID())
+    delete(room.trackRemotes, t.ID())
+}
+
+// --------------------------------------------------------
+// Offer 再生成
+// --------------------------------------------------------
+
+func signalPeerConnections(room *Room) {
+    room.listLock.Lock()
+    defer func() {
+        room.listLock.Unlock()
+        dispatchKeyFrame(room)
+        rooms.cleanupEmptyRoom(room.ID)
+    }()
+
+    attemptSync := func() bool {
+        for id, p := range room.participants {
+            pc := p.PC
+
+            if pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
+                delete(room.participants, id)
+                return true
+            }
+
+            existing := map[string]bool{}
+
+            for _, sender := range pc.GetSenders() {
+                if sender.Track() != nil {
+                    tid := sender.Track().ID()
+                    existing[tid] = true
+
+                    if _, ok := room.trackLocals[tid]; !ok {
+                        if err := pc.RemoveTrack(sender); err != nil {
+                            return true
+                        }
+                    }
+                }
+            }
+
+            for _, receiver := range pc.GetReceivers() {
+                if receiver.Track() != nil {
+                    existing[receiver.Track().ID()] = true
+                }
+            }
+
+            for tid, tl := range room.trackLocals {
+                if !existing[tid] {
+                    if _, err := pc.AddTrack(tl); err != nil {
+                        return true
+                    }
+                }
+            }
+
+            offer, err := pc.CreateOffer(nil)
+            if err != nil {
+                return true
+            }
+            if err := pc.SetLocalDescription(offer); err != nil {
+                return true
+            }
+
+            offerJSON, _ := json.Marshal(offer)
+            p.WS.WriteJSON(&WebsocketMessage{
+                Event: "offer",
+                Data:  string(offerJSON),
+            })
+        }
+        return false
+    }
+
+    for i := 0; ; i++ {
+        if i == 25 {
+            go func() {
+                time.Sleep(3 * time.Second)
+                signalPeerConnections(room)
+            }()
+            return
+        }
+        if !attemptSync() {
+            break
+        }
+    }
+}
+
+func (r *Rooms) cleanupEmptyRoom(id string) {
+	room, ok := r.getRoom(id)
+	if !ok {
+		return
+	}
+
+	room.listLock.Lock()
+	defer room.listLock.Unlock()
+
+	if len(room.wsConnections) == 0 &&
+		len(room.participants) == 0 &&
+		len(room.trackLocals) == 0 &&
+		len(room.trackRemotes) == 0 {
+
+		room.cancelFunc()
+		r.deleteRoom(id)
+	}
+}
+
+// --------------------------------------------------------
+// KeyFrame
+// --------------------------------------------------------
+
+func dispatchKeyFrame(room *Room) {
+    room.listLock.Lock()
+    defer room.listLock.Unlock()
+
+    for _, p := range room.participants {
+        pc := p.PC
+        for _, r := range pc.GetReceivers() {
+            if r.Track() != nil {
+                pc.WriteRTCP([]rtcp.Packet{
+                    &rtcp.PictureLossIndication{
+                        MediaSSRC: uint32(r.Track().SSRC()),
+                    },
+                })
+            }
+        }
+    }
 }

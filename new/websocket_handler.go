@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"net/http"
 	"sync"
 	"time"
 
@@ -12,351 +11,211 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func websocketBroadcastHandler(c *gin.Context) {
-	roomId := c.Param("roomId")
-	user := getUser(c)
-	userId := user.ID
-	room, ok := rooms.getRoom(roomId);if ok {
-		//　これだと再接続などで困るので他の方法を考える
-		// _, ok := room.clients[userId];if ok {
-		// 	errMsg := "他の端末で参加しています。"
-		// 	log.Warn(errMsg)
-		// 	c.JSON(http.StatusBadRequest, gin.H{"message": errMsg})
-		// 	return
-		// }
-	}
 
-	unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		log.Error("Failed to upgrade HTTP to Websocket: ", err)
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
+func websocketHandler(c *gin.Context) {
+    user := getUser(c)
+    roomId := c.Param("room")
+    room := rooms.getOrCreate(roomId)
 
-	ws := NewThreadSafeWriter(unsafeConn)
-	defer ws.Close()
-	pc := NewPeerConnection()
-	defer func() {
-		pc.Close()
-		room, ok := rooms.getRoom(roomId);if !ok {
-			return
-		}
-		var users []UserInfo
-		for _, client := range room.clients {
-			if client.ID == user.ID {
-				continue
-			}
-			users = append(users, UserInfo{
-				ID: client.ID,
-				Name: client.Name,
-				Email: client.Email,
-				Image: client.Image,
+    // Upgrade HTTP → WebSocket
+    unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+    if err != nil {
+        log.Errorf("upgrade failed: %v", err)
+        return
+    }
+
+    ws := &ThreadSafeWriter{unsafeConn, sync.Mutex{}}
+
+    // --- register WS ---
+    room.listLock.Lock()
+    room.wsConnections[ws.Conn] = ws
+    room.listLock.Unlock()
+
+    var peerConnection *webrtc.PeerConnection
+
+    // ---- clean up ----
+    defer func() {
+        if peerConnection != nil {
+            peerConnection.Close()
+        }
+
+        room.listLock.Lock()
+        delete(room.participants, user.ID)
+        delete(room.wsConnections, ws.Conn)
+        room.listLock.Unlock()
+
+        ws.Close()
+        rooms.cleanupEmptyRoom(roomId)
+    }()
+
+    msg := &WebsocketMessage{}
+
+    for {
+        // ---------- read WS message ----------
+        _, raw, err := ws.ReadMessage()
+        if err != nil {
+            log.Errorf("WS read error: %v", err)
+            return
+        }
+
+        if err := json.Unmarshal(raw, msg); err != nil {
+            log.Errorf("json unmarshal error: %v", err)
+            return
+        }
+
+        switch msg.Event {
+
+        // =====================================================
+        //                      OFFER
+        // =====================================================
+        case "offer":
+            peerConnection, err = webrtc.NewPeerConnection(webrtc.Configuration{})
+            if err != nil {
+                log.Errorf("pc create error: %v", err)
+                return
+            }
+
+            // Recvonly transceivers
+            for _, typ := range []webrtc.RTPCodecType{
+                webrtc.RTPCodecTypeVideo,
+                webrtc.RTPCodecTypeAudio,
+            } {
+                if _, err := peerConnection.AddTransceiverFromKind(
+                    typ,
+                    webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly},
+                ); err != nil {
+                    log.Errorf("add transceiver error: %v", err)
+                    return
+                }
+            }
+
+            // ----- register participant -----
+            room.listLock.Lock()
+            room.participants[user.ID] = &Participant{
+                user,
+                ws,
+                peerConnection,
+            }
+            room.listLock.Unlock()
+
+			peerConnection.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
+				log.Info("Connection state change: %s", p)
+
+				switch p {
+				case webrtc.PeerConnectionStateConnected:
+					room, ok := rooms.getRoom(roomId);if !ok {
+						return
+					}
+					var users []UserInfo
+					for _, participant := range room.participants {
+						users = append(users, UserInfo{
+							ID: participant.ID,
+							Name: participant.Name,
+							Email: participant.Email,
+							Image: participant.Image,
+						})
+					}
+					res, _ := json.Marshal(users)
+					for _, participant := range room.participants {
+						participant.WS.Send("access", string(res))
+					}
+				case webrtc.PeerConnectionStateFailed:
+					_ = peerConnection.Close()
+				case webrtc.PeerConnectionStateDisconnected:
+					// 猶予を与える
+					go func() {
+						time.Sleep(20 * time.Second)
+						if peerConnection.ConnectionState() == webrtc.PeerConnectionStateDisconnected {
+							_ = peerConnection.Close()
+						}
+					}()
+				case webrtc.PeerConnectionStateClosed:
+					room, ok := rooms.getRoom(roomId);if !ok {
+						return
+					}
+					room.listLock.Lock()
+					delete(room.participants, user.ID)
+					room.listLock.Unlock()
+					var users []UserInfo
+					for _, participant := range room.participants {
+						users = append(users, UserInfo{
+							ID: participant.ID,
+							Name: participant.Name,
+							Email: participant.Email,
+							Image: participant.Image,
+						})
+					}
+					res, _ := json.Marshal(users)
+					for _, participant := range room.participants {
+						participant.WS.Send("access", string(res))
+					}
+				}
 			})
-		}
-		for _, client := range room.clients {
-			client.WS.Send("access", users)
-		}
-	}()
 
-	// Add our new PeerConnection to global list
-	room = rooms.getOrCreate(roomId)
-	room.listLock.Lock()
-	client, ok := room.clients[userId];if ok {
-		client.WS.Close()
-		client.Peer.Close()
-	}
-	log.Error(userId)
-	room.clients[userId] = &RTCClient{
-		user,
-		ws,
-		pc,
-		sync.Mutex{},
-		false,
-		false,
-	}
-	room.listLock.Unlock()
+            // ----- track handler -----
+            peerConnection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+                log.Infof("Got remote track: %s %s", t.Kind(), t.ID())
 
-	// Trickle ICE. Emit server candidate to client
-	pc.OnICECandidate(func(i *webrtc.ICECandidate) {
-		if i == nil {
-			return
-		}
+                trackLocal := addTrack(room, t)
+                if trackLocal == nil {
+                    return
+                }
+                defer removeTrack(room, trackLocal)
 
-		if writeErr := ws.Send("candidate", i.ToJSON()); writeErr != nil {
-			log.Error("Failed to write JSON: %v", writeErr)
-		}
-	})
+                buf := make([]byte, 1500)
+                pkt := &rtp.Packet{}
 
-	// If PeerConnection is closed remove it from global list
-	pc.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
-		log.Info("Connection state change: %s", p)
+                for {
+                    n, _, err := t.Read(buf)
+                    if err != nil {
+                        return
+                    }
 
-		switch p {
-		case webrtc.PeerConnectionStateConnected:
-			room, ok := rooms.getRoom(roomId);if !ok {
-				return
-			}
-			var users []UserInfo
-			for _, client := range room.clients {
-				if client.ID == user.ID {
-					continue
-				}
-				users = append(users, UserInfo{
-					ID: client.ID,
-					Name: client.Name,
-					Email: client.Email,
-					Image: client.Image,
-				})
-			}
-			for _, client := range room.clients {
-				client.WS.Send("access", users)
-			}
-		case webrtc.PeerConnectionStateFailed:
-			_ = pc.Close()
-		case webrtc.PeerConnectionStateDisconnected:
-			// 猶予を与える
-			go func() {
-				time.Sleep(20 * time.Second)
-				if pc.ConnectionState() == webrtc.PeerConnectionStateDisconnected {
-					_ = pc.Close()
-				}
-			}()
-		case webrtc.PeerConnectionStateClosed:
-			// クライアント即削除（部屋ロック下で）
-			room := rooms.getOrCreate(roomId)
-			room.listLock.Lock()
-			delete(room.clients, userId)
-			room.listLock.Unlock()
-			signalPeerConnections(roomId)
-		}
-	})
+                    if pkt.Unmarshal(buf[:n]) != nil {
+                        continue
+                    }
 
-	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		log.Info("Got remote track: Kind=%s, ID=%s, PayloadType=%d", t.Kind(), t.ID(), t.PayloadType())
+                    pkt.Extension = false
+                    pkt.Extensions = nil
+                    trackLocal.WriteRTP(pkt)
+                }
+            })
 
-		trackLocal := addTrack(roomId, t)
-		defer removeTrack(roomId, trackLocal)
+            // ----- set remote offer -----
+            var offer webrtc.SessionDescription
+            json.Unmarshal([]byte(msg.Data), &offer)
+            peerConnection.SetRemoteDescription(offer)
 
-		buf := make([]byte, 1500)
-		rtpPkt := &rtp.Packet{}
+            // ----- create answer -----
+            answer, _ := peerConnection.CreateAnswer(nil)
+            peerConnection.SetLocalDescription(answer)
 
-		for {
-			i, _, err := t.Read(buf)
-			if err != nil {
-				return
-			}
+            res, _ := json.Marshal(answer)
+            ws.WriteJSON(&WebsocketMessage{
+                Event: "answer",
+                Data:  string(res),
+            })
 
-			if err = rtpPkt.Unmarshal(buf[:i]); err != nil {
-				log.Errorf("Failed to unmarshal incoming RTP packet: %v", err)
+            // renegotiate others
+            signalPeerConnections(room)
 
-				return
-			}
+        // =====================================================
+        //                  CANDIDATE
+        // =====================================================
+        case "candidate":
+            var cand webrtc.ICECandidateInit
+            json.Unmarshal([]byte(msg.Data), &cand)
+            if err := peerConnection.AddICECandidate(cand); err != nil {
+                log.Errorf("ice add error: %v", err)
+            }
 
-			rtpPkt.Extension = false
-			rtpPkt.Extensions = nil
-
-			if err = trackLocal.WriteRTP(rtpPkt); err != nil {
-				return
-			}
-		}
-	})
-
-	pc.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
-		log.Infof("ICE connection state changed: %s", is)
-	})
-
-	// Signal for the new PeerConnection
-	signalPeerConnections(roomId)
-
-	message := &WebsocketMessage{}
-	for {
-		_, raw, err := ws.ReadMessage()
-		if err != nil {
-			log.Errorf("Failed to read message: %v", err)
-			return
-		}
-
-		if err := json.Unmarshal(raw, &message); err != nil {
-			log.Error("Failed to unmarshal json to message: %v", err)
-			return
-		}
-		log.Debug("Got message: %s", message.Event)
-		switch message.Event {
-		case "candidate":
-			candidate := webrtc.ICECandidateInit{}
-			raw, err := json.Marshal(message.Data);if err != nil {
-				log.Errorf("Failed to unmarshal json to candidate: %v", err)
-
-				return
-			}
-			if err := json.Unmarshal([]byte(raw), &candidate); err != nil {
-				log.Errorf("Failed to unmarshal json to candidate: %v", err)
-
-				return
-			}
-
-			log.Infof("Got candidate: %v", candidate)
-
-			if err := pc.AddICECandidate(candidate); err != nil {
-				log.Errorf("Failed to add ICE candidate: %v", err)
-
-				return
-			}
-		case "answer":
-			answer := webrtc.SessionDescription{}
-			raw, err := json.Marshal(message.Data);if err != nil {
-				log.Errorf("Failed to unmarshal json to candidate: %v", err)
-
-				return
-			}
-			if err := json.Unmarshal([]byte(raw), &answer); err != nil {
-				log.Errorf("Failed to unmarshal json to answer: %v", err)
-
-				return
-			}
-
-			if err := pc.SetRemoteDescription(answer); err != nil {
-				log.Errorf("Failed to set remote description: %v", err)
-				return
-			}
-			signalPeerConnections(roomId)
-		default:
-			log.Errorf("unknown message: %+v", message)
-		}
-	}
-}
-
-func websocketViewerHandler(c *gin.Context) {
-	roomId := c.Param("roomId")
-	user := getUser(c)
-	userId := user.ID + "_viewer"
-	// 一旦viewerとclientを分けずにclientsに格納
-	room, ok := rooms.getRoom(roomId);if ok {
-		_, ok := room.clients[userId];if ok {
-			errMsg := "他の端末で参加しています。"
-			log.Warn(errMsg)
-			c.JSON(http.StatusBadRequest, gin.H{"message": errMsg})
-			return
-		}
-	}
-	unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		log.Error("Failed to upgrade HTTP to Websocket: ", err)
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-
-	ws := NewThreadSafeWriter(unsafeConn)
-	defer ws.Close()
-	pc := NewPeerConnection()
-	defer pc.Close()
-
-	room = rooms.getOrCreate(roomId)
-	room.listLock.Lock()
-	client, ok := room.clients[userId];if ok {
-		client.WS.Close()
-		client.Peer.Close()
-	}
-	log.Error(userId)
-	room.clients[userId] = &RTCClient{user, ws, pc, sync.Mutex{}, false, false}
-	room.listLock.Unlock()
-
-	// Trickle ICE. Emit server candidate to client
-	pc.OnICECandidate(func(i *webrtc.ICECandidate) {
-		if i == nil {
-			return
-		}
-
-		if writeErr := ws.Send("candidate", i.ToJSON()); writeErr != nil {
-			log.Error("Failed to write JSON: %v", writeErr)
-		}
-	})
-
-	// If PeerConnection is closed remove it from global list
-	pc.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
-		log.Info("Connection state change: %s", p)
-
-		switch p {
-		case webrtc.PeerConnectionStateFailed:
-			_ = pc.Close()
-		case webrtc.PeerConnectionStateDisconnected:
-			// 猶予を与える
-			go func() {
-				time.Sleep(20 * time.Second)
-				if pc.ConnectionState() == webrtc.PeerConnectionStateDisconnected {
-					_ = pc.Close()
-				}
-			}()
-		case webrtc.PeerConnectionStateClosed:
-			// クライアント即削除（部屋ロック下で）
-			room := rooms.getOrCreate(roomId)
-			room.listLock.Lock()
-			delete(room.clients, userId)
-			room.listLock.Unlock()
-			signalPeerConnections(roomId)
-		}
-	})
-
-	pc.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
-		log.Infof("ICE connection state changed: %s", is)
-	})
-
-	// Signal for the new PeerConnection
-	signalPeerConnections(roomId)
-
-	message := &WebsocketMessage{}
-	for {
-		_, raw, err := ws.ReadMessage()
-		if err != nil {
-			log.Errorf("Failed to read message: %v", err)
-			return
-		}
-
-		if err := json.Unmarshal(raw, &message); err != nil {
-			log.Error("Failed to unmarshal json to message: %v", err)
-			return
-		}
-		log.Debug("Got message: %s", message.Event)
-		switch message.Event {
-		case "candidate":
-			candidate := webrtc.ICECandidateInit{}
-			raw, err := json.Marshal(message.Data);if err != nil {
-				log.Errorf("Failed to unmarshal json to candidate: %v", err)
-
-				return
-			}
-			if err := json.Unmarshal([]byte(raw), &candidate); err != nil {
-				log.Errorf("Failed to unmarshal json to candidate: %v", err)
-
-				return
-			}
-
-			log.Infof("Got candidate: %v", candidate)
-
-			if err := pc.AddICECandidate(candidate); err != nil {
-				log.Errorf("Failed to add ICE candidate: %v", err)
-
-				return
-			}
-		case "answer":
-			answer := webrtc.SessionDescription{}
-			raw, err := json.Marshal(message.Data);if err != nil {
-				log.Errorf("Failed to unmarshal json to candidate: %v", err)
-
-				return
-			}
-			if err := json.Unmarshal([]byte(raw), &answer); err != nil {
-				log.Errorf("Failed to unmarshal json to answer: %v", err)
-
-				return
-			}
-
-			if err := pc.SetRemoteDescription(answer); err != nil {
-				log.Errorf("Failed to set remote description: %v", err)
-				return
-			}
-		default:
-			log.Errorf("unknown message: %+v", message)
-		}
-	}
+        // =====================================================
+        //                    ANSWER
+        // =====================================================
+        case "answer":
+            var ans webrtc.SessionDescription
+            json.Unmarshal([]byte(msg.Data), &ans)
+            peerConnection.SetRemoteDescription(ans)
+        }
+    }
 }

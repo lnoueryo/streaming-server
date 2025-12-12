@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/pion/webrtc/v4"
 )
 
 func main() {
@@ -22,13 +21,13 @@ func main() {
 	})
 	wsAuth := r.Group("/ws")
 	wsAuth.Use(FirebaseWebsocketAuth())
-	wsAuth.GET("/live/:roomId", websocketBroadcastHandler)
-	wsAuth.GET("/live/:roomId/viewer", websocketViewerHandler)
+	wsAuth.GET("/live/:roomId", websocketHandler)
+	// wsAuth.GET("/live/:roomId/viewer", websocketViewerHandler)
 
 	httpAuth := r.Group("/")
 	httpAuth.Use(FirebaseHttpAuth())
 	httpAuth.GET("/room/:roomId/user", getRoom)
-	httpAuth.GET("/room/:roomId/user/delete", deleteRtcClient)
+	httpAuth.GET("/room/:roomId/user/delete", removeParticipant)
 	r.Run(":8080")
 }
 
@@ -40,14 +39,4 @@ var rooms = &Rooms{
 	map[string]*Room{},
 	sync.RWMutex{},
 }
-
-type RTCClient struct {
-	UserInfo
-	WS *ThreadSafeWriter
-    Peer      *webrtc.PeerConnection
-    sigMu       sync.Mutex
-    makingOffer bool
-    needRenego  bool
-}
-
 

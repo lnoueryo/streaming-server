@@ -13,7 +13,7 @@ type ThreadSafeWriter struct {
 
 type WebsocketMessage struct {
 	Event string `json:"event"`
-	Data  interface{} `json:"data"`
+	Data  string `json:"data"`
 }
 
 func NewThreadSafeWriter(unsafeConn *websocket.Conn) *ThreadSafeWriter {
@@ -21,9 +21,8 @@ func NewThreadSafeWriter(unsafeConn *websocket.Conn) *ThreadSafeWriter {
 }
 
 
-func (t *ThreadSafeWriter) Send(event string, data interface{}) error {
+func (t *ThreadSafeWriter) Send(event string, data string) error {
 	t.Lock()
 	defer t.Unlock()
-
 	return t.Conn.WriteJSON(WebsocketMessage{event, data})
 }
