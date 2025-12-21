@@ -24,7 +24,7 @@ func main() {
 		})
 	})
 	r.GET("/test", func(c *gin.Context) {
-		c.JSON(200, GetTargetSpaceMember())
+		
 	})
 	wsAuth := r.Group("/ws")
 	wsAuth.Use(FirebaseWebsocketAuth())
