@@ -11,7 +11,7 @@ import (
 	pb "streaming-signaling.jounetsism.biz/proto"
 )
 
-func GetTargetSpaceMember() *pb.GetTargetSpaceMemberResponse {
+func GetTargetSpaceMember(roomId string, userId string) (*pb.GetTargetSpaceMemberResponse, error) {
 	// ① gRPC サーバーへ接続
 	conn, err := grpc.NewClient(
 		"dns:///streaming-backend:50051",                     // 推奨は DNS スキーマ付き
@@ -31,12 +31,13 @@ func GetTargetSpaceMember() *pb.GetTargetSpaceMemberResponse {
 	resp, err := client.GetTargetSpaceMember(
 		ctx,
 		&pb.GetTargetSpaceMemberRequest{
-			SpaceId: "1",
-			UserId:  "UZ5vasoWVWbI0bJ1qzW01FuXGeG3",
+			SpaceId: roomId,
+			UserId:  userId,
 		},
 	)
 	if err != nil {
 		log.Fatalf("GetTargetSpaceMember failed: %v", err)
+		return nil, err
 	}
 
 	// 結果を表示
@@ -49,5 +50,5 @@ func GetTargetSpaceMember() *pb.GetTargetSpaceMemberResponse {
 		resp.GetRole(),
 	)
 
-	return resp
+	return resp, nil
 }
