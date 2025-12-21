@@ -94,7 +94,7 @@ func websocketHandler(c *gin.Context) {
             }
 
             // ----- register participant -----
-            spaceMember := GetSpaceMember()
+            spaceMember := GetTargetSpaceMember()
             room.listLock.Lock()
             _, ok := room.participants[user.ID]; if ok {
                 ws.WriteJSON(&WebsocketMessage{
