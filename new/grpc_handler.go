@@ -148,7 +148,6 @@ func (s *RoomService) AcceptInvitation(
 	ctx context.Context,
 	req *signaling.SpaceMemberRequest,
 ) (*signaling.Void, error) {
-	logrus.Info("AcceptInvitation: checking participant role: %s", req.SpaceMember.Role)
 	room, ok := rooms.getRoom(req.SpaceId)
 	if !ok {
 		md := metadata.Pairs(
@@ -159,7 +158,6 @@ func (s *RoomService) AcceptInvitation(
 	}
 
 	for _, p := range room.participants {
-		logrus.Info("AcceptInvitation: checking participant role: %s", p.Role)
 		if p.Role == "owner" {
 			res, _ := json.Marshal(req.SpaceMember)
 			p.WS.Send("accept-invitation", string(res))
