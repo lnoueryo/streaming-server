@@ -23,9 +23,7 @@ func main() {
 			"message": "Hello World",
 		})
 	})
-	r.GET("/test", func(c *gin.Context) {
-		
-	})
+
 	wsAuth := r.Group("/ws")
 	wsAuth.Use(FirebaseWebsocketAuth())
 	wsAuth.GET("/live/:roomId", websocketHandler)
@@ -33,8 +31,6 @@ func main() {
 
 	httpAuth := r.Group("/")
 	httpAuth.Use(AuthHttpInterceptor())
-	httpAuth.GET("/room/:roomId/user", getRoom)
-	httpAuth.GET("/room/:roomId/user/delete", removeParticipant)
 	go r.Run(":8080")
 	lis, _ := net.Listen("tcp", ":50051")
 
