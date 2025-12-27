@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -57,11 +58,6 @@ func websocketHandler(c *gin.Context) {
         }
 
         switch msg.Event {
-        case "offer":
-            if err := CreatePeer(roomId, user); err != nil {
-                log.Errorf("create peer error: %v", err)
-                return
-            }
         case "candidate":
             if err := AddCandidate(roomId, user, msg.Data); err != nil {
                 log.Errorf("add candidate error: %v", err)
@@ -78,10 +74,14 @@ func websocketHandler(c *gin.Context) {
 
 func websocketViewerHandler(c *gin.Context) {
     user := getUser(c)
+	uid, err := uuid.NewV7()
+	if err != nil {
+		log.Fatal(err)
+	}
+    user.ID = uid.String()
     roomId := c.Param("roomId")
     room := rooms.getOrCreate(roomId)
 
-    // Upgrade HTTP → WebSocket
     unsafeConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
     if err != nil {
         log.Errorf("upgrade failed: %v", err)
@@ -121,17 +121,17 @@ func websocketViewerHandler(c *gin.Context) {
 
         switch msg.Event {
         case "offer":
-            if err := CreatePeer(roomId, user); err != nil {
+            if err := CreateViewerPeer(roomId, user); err != nil {
                 log.Errorf("create peer error: %v", err)
                 return
             }
         case "candidate":
-            if err := AddCandidate(roomId, user, msg.Data); err != nil {
+            if err := AddViewerCandidate(roomId, user, msg.Data); err != nil {
                 log.Errorf("add candidate error: %v", err)
                 return
             }
         case "answer":
-            if err := SetAnswer(roomId, user, msg.Data); err != nil {
+            if err := SetViewerAnswer(roomId, user, msg.Data); err != nil {
                 log.Errorf("set answer error: %v", err)
                 return
             }

@@ -64,7 +64,6 @@ func (s *SignalingService) Unicast(
 	}
 
 	for _, p := range room.wsConnections {
-		logrus.Errorf("%s %s", p.UserID, req.GetUserId())
 		if p.UserID == req.GetUserId() {
 			p.Send(req.Event, string(req.Data))
 		}

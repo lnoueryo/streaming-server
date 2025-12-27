@@ -27,6 +27,7 @@ func main() {
 	wsAuth := r.Group("/ws")
 	wsAuth.Use(FirebaseWebsocketAuth())
 	wsAuth.GET("/live/:roomId", websocketHandler)
+	wsAuth.GET("/live/:roomId/viewer", websocketViewerHandler)
 	// wsAuth.GET("/live/:roomId/viewer", websocketViewerHandler)
 
 	httpAuth := r.Group("/")

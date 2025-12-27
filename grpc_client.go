@@ -31,7 +31,7 @@ func initRoomClient() {
     mediaServiceClient = media.NewMediaServiceClient(conn)
 }
 
-func CreatePeer(spaceId string, user UserInfo) error {
+func CreateViewerPeer(spaceId string, user UserInfo) error {
     onceInitRoom.Do(initRoomClient)
     token := createServiceJWT()
     md := metadata.New(map[string]string{
@@ -41,7 +41,7 @@ func CreatePeer(spaceId string, user UserInfo) error {
     ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
     defer cancel()
 
-    _, err := mediaServiceClient.CreatePeer(ctx, &media.CreatePeerRequest{
+    _, err := mediaServiceClient.CreateViewerPeer(ctx, &media.CreateViewerPeerRequest{
         SpaceId: spaceId,
         User: &media.User{
             Id:    user.ID,
@@ -83,6 +83,33 @@ func AddCandidate(spaceId string, user UserInfo, candidate string) error {
     return nil
 }
 
+func AddViewerCandidate(spaceId string, user UserInfo, candidate string) error {
+    onceInitRoom.Do(initRoomClient)
+    token := createServiceJWT()
+    md := metadata.New(map[string]string{
+        "authorization": "Bearer " + token,
+    })
+    ctx := metadata.NewOutgoingContext(context.Background(), md)
+    ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
+
+    _, err := mediaServiceClient.AddViewerCandidate(ctx, &media.AddCandidateRequest{
+        SpaceId: spaceId,
+        User: &media.User{
+			Id:    user.ID,
+			Email: user.Email,
+			Name:  user.Name,
+			Image: user.Image,
+		},
+		Candidate: candidate,
+    })
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
 func SetAnswer(spaceId string, user UserInfo, answer string) error {
     onceInitRoom.Do(initRoomClient)
     token := createServiceJWT()
@@ -94,6 +121,33 @@ func SetAnswer(spaceId string, user UserInfo, answer string) error {
     defer cancel()
 
     _, err := mediaServiceClient.SetAnswer(ctx, &media.SetAnswerRequest{
+        SpaceId: spaceId,
+        User: &media.User{
+			Id:    user.ID,
+			Email: user.Email,
+			Name:  user.Name,
+			Image: user.Image,
+		},
+		Answer: answer,
+    })
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func SetViewerAnswer(spaceId string, user UserInfo, answer string) error {
+    onceInitRoom.Do(initRoomClient)
+    token := createServiceJWT()
+    md := metadata.New(map[string]string{
+        "authorization": "Bearer " + token,
+    })
+    ctx := metadata.NewOutgoingContext(context.Background(), md)
+    ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
+
+    _, err := mediaServiceClient.SetViewerAnswer(ctx, &media.SetAnswerRequest{
         SpaceId: spaceId,
         User: &media.User{
 			Id:    user.ID,
